@@ -326,9 +326,7 @@ build/main.o: src/main.cpp src/main.h src/mLibInclude.h \
   /home/kel/Optlang/Opt/examples/external/mLib/include/mLibLodePNG.h \
   /home/kel/Optlang/Opt/examples/external/mLib/include/ext-lodepng/lodepng.h \
   /home/kel/Optlang/Opt/examples/external/mLib/include/ext-lodepng/imageLoaderLodePNG.h \
-  src/CombinedSolver.h \
-  /home/kel/Optlang/Opt/examples/external/nanoflann/include/nanoflann.hpp \
-  /usr/local/cuda/include/cuda_runtime.h \
+  src/CombinedSolver.h /usr/local/cuda/include/cuda_runtime.h \
   /usr/local/cuda/include/host_config.h \
   /usr/local/cuda/include/builtin_types.h \
   /usr/local/cuda/include/device_types.h \
@@ -1142,8 +1140,6 @@ src/mLibInclude.h:
 /home/kel/Optlang/Opt/examples/external/mLib/include/ext-lodepng/imageLoaderLodePNG.h:
 
 src/CombinedSolver.h:
-
-/home/kel/Optlang/Opt/examples/external/nanoflann/include/nanoflann.hpp:
 
 /usr/local/cuda/include/cuda_runtime.h:
 
