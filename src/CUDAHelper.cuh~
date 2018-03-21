@@ -1,1 +1,0 @@
-void initAngle(void* ptr_angles, unsigned int m_nNodes);
