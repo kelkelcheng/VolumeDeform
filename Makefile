@@ -1,5 +1,5 @@
 EXECUTABLE = volumn_deform
-OBJS = build/mLibSource.o build/main.o build/CUDAHelper.o
+OBJS = build/mLibSource.o build/main.o build/MarchingCubes.o build/TSDFVolumn.o build/MC_table.o
 
 UNAME := $(shell uname)
 ifeq ($(UNAME), Darwin)
