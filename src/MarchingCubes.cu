@@ -8,7 +8,7 @@
 using namespace std;
 
 #define CUDART_NAN_F            __int_as_float(0x7fffffff)
-// CUDA kernel function to integrate a TSDF voxel volumn given depth images
+// CUDA kernel function to integrate a TSDF voxel volume given depth images
 
 __device__
 float3 compute_intersection_for_edge( int edge_index,
@@ -277,10 +277,10 @@ void process_kernel_output( dim3 size,
 }
 
 __host__
-void extract_surface(TSDFVolumn & volumn, vector<float3>& vertices, vector<int3>& triangles){
+void extract_surface(TSDFVolume & volume, vector<float3>& vertices, vector<int3>& triangles){
 	// Allocate storage on device and locally
 	// Fail if not possible
-	dim3 size = volumn.get_size();
+	dim3 size = volume.get_size();
 	//int tmp = size.x; size.x = size.z; size.z = tmp;
 
 	size_t num_cubes_per_layer = (size.x - 1) * (size.y - 1);
@@ -329,8 +329,8 @@ void extract_surface(TSDFVolumn & volumn, vector<float3>& vertices, vector<int3>
 	// Now iterate over each slice
 	size_t layer_size =  size.x * size.y;
 	clock.tik();
-	const float* grid = volumn.get_grid();
-	const float3* centers = volumn.get_deform();
+	const float* grid = volume.get_grid();
+	const float3* centers = volume.get_deform();
 	for ( int vz = 0; vz < size.z - 1; vz++ ) {
 
 		// Set up for layer
@@ -347,7 +347,7 @@ void extract_surface(TSDFVolumn & volumn, vector<float3>& vertices, vector<int3>
 		mc_kernel <<< grid,block >>>(layer1_data,layer2_data,
 									layer1_center, layer2_center,
 		                               size,
-									   volumn.get_origin(),
+									   volume.get_origin(),
 		                               vz, d_vertices, d_triangles );
 
 		err = cudaDeviceSynchronize( );		

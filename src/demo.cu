@@ -4,7 +4,7 @@
 #include <sstream>
 #include <string>
 #include "utils.hpp"
-#include "TSDFVolumn.h"
+#include "TSDFVolume.h"
 #include "MarchingCubes.h"
 
 #include <cstdio>
@@ -14,8 +14,8 @@ using namespace cv;
 using namespace std;
 
 
-// Loads a binary file with depth data and generates a TSDF voxel volumn (5m x 5m x 5m at 1cm resolution)
-// Volumn is aligned with respect to the camera coordinates of the first frame (a.k.a. base frame)
+// Loads a binary file with depth data and generates a TSDF voxel volume (5m x 5m x 5m at 1cm resolution)
+// Volume is aligned with respect to the camera coordinates of the first frame (a.k.a. base frame)
 int main(int argc, char * argv[]) {
 
 	// Location of folder containing RGB-D frames and camera pose files
@@ -39,7 +39,7 @@ int main(int argc, char * argv[]) {
 	std::clock_t start;
 	double duration;
 	start = std::clock();
-	TSDFVolumn volumn(dim_x, dim_y, dim_z, make_float3(-1.5f,-1.5f,0.5f), voxel_size);
+	TSDFVolume volume(dim_x, dim_y, dim_z, make_float3(-1.5f,-1.5f,0.5f), voxel_size);
 	duration = ( std::clock() - start ) / (double) CLOCKS_PER_SEC;
 	std::cout<<"TSDF Initialization: "<< duration <<'\n';
 	// Read camera intrinsics
@@ -70,7 +70,7 @@ int main(int argc, char * argv[]) {
 		std::cout << "Fusing: " << depth_im_file << std::endl;
 
 		start = std::clock();
-		volumn.Integrate(depth_im,cam_K,world2cam);
+		volume.Integrate(depth_im,cam_K,world2cam);
 
 		duration = ( std::clock() - start ) / (double) CLOCKS_PER_SEC;
 		std::cout<<"TSDF Integration: "<< duration <<'\n';
@@ -80,7 +80,7 @@ int main(int argc, char * argv[]) {
 	std::cout << "Saving surface point cloud (tsdf.ply)..." << std::endl;
 	std::vector<float3> vertices ;
 	std::vector<int3> triangles;
-	extract_surface(volumn, vertices, triangles);
+	extract_surface(volume, vertices, triangles);
 	write_to_ply("upperbody.ply",vertices,triangles);
 
 

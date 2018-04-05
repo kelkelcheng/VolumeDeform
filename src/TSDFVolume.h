@@ -1,19 +1,19 @@
-#ifndef TSDFVolumn_h
-#define TSDFVolumn_h
+#ifndef TSDFVolume_h
+#define TSDFVolume_h
 
 #include <iostream>
 #include <string>
 #include <vector>
 
-class TSDFVolumn{
+class TSDFVolume{
 public:
-	TSDFVolumn(int x, int y, int z, float3 ori, float3 size);
+	TSDFVolume(int x, int y, int z, float3 ori, float3 size);
 
 	dim3 get_size(){
 		return m_size;
 	}
 
-	~TSDFVolumn();
+	~TSDFVolume();
 
 	void deallocate();
 

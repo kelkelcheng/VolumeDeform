@@ -12,7 +12,7 @@
 #include <opencv2/highgui.hpp>
 
 #include <math.h>
-#include "TSDFVolumn.h"
+#include "TSDFVolume.h"
 // just for testing purpose
 //extern "C" void initAngle(void* ptr_angles, unsigned int m_nNodes);
 
@@ -33,14 +33,14 @@ class CombinedSolver : public CombinedSolverBase
 {
 
 	public:
-        CombinedSolver(const SimpleMesh* sourceMesh, const std::vector<std::string> targetFiles, CombinedSolverParameters params, TSDFVolumn* volumn)
+        CombinedSolver(const SimpleMesh* sourceMesh, const std::vector<std::string> targetFiles, CombinedSolverParameters params, TSDFVolume* volume)
 		{
             m_combinedSolverParameters = params;
             m_result = *sourceMesh;
 			m_initial = m_result;
 			m_targets = targetFiles;
             // !!! New
-			m_volumn = volumn;
+			m_volume = volume;
             m_gridDims = make_int3(25, 26, 4);
             m_dims      = m_gridDims;
 			m_dims.x--; m_dims.y--; m_dims.z--;
@@ -461,7 +461,7 @@ class CombinedSolver : public CombinedSolverBase
 
 			//std::vector<float3> h_gridVertexPosFloat3(m_nNodes);
 			h_gridVertexPosFloat3.resize(m_nNodes);
-			m_volumn->InitSubGrid(h_gridVertexPosFloat3, m_gridDims);
+			m_volume->InitSubGrid(h_gridVertexPosFloat3, m_gridDims);
 			for (int i = 0; i <= m_dims.x; i++)
 			{
 				for (int j = 0; j <= m_dims.y; j++)
@@ -767,7 +767,7 @@ class CombinedSolver : public CombinedSolverBase
 	private:
 		unsigned int m_nNodes; //number of grid points
         unsigned int m_M; //number of mesh points
-		TSDFVolumn* m_volumn;
+		TSDFVolume* m_volume;
 
 		float3 m_min;
 		float3 m_max;

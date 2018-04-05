@@ -1,4 +1,4 @@
-#include "TSDFVolumn.h"
+#include "TSDFVolume.h"
 #include <iostream>
 #include <string>
 #include "cudaUtil.h"
@@ -138,7 +138,7 @@ void deformation( float3* grid, float3 * deformation, dim3 grid_size ) {
 }*/
 
 __host__
-TSDFVolumn::TSDFVolumn(int x, int y, int z, float3 ori, float3 size){
+TSDFVolume::TSDFVolume(int x, int y, int z, float3 ori, float3 size){
 		max_threads = 512;
 		x+=1; y+=1; z+=1;
 
@@ -181,8 +181,8 @@ TSDFVolumn::TSDFVolumn(int x, int y, int z, float3 ori, float3 size){
 		cudaDeviceSynchronize( );*/
 	}
 
-TSDFVolumn::~TSDFVolumn() {
-    std::cout << "Destroying TSDFVolumn" << std::endl;
+TSDFVolume::~TSDFVolume() {
+    std::cout << "Destroying TSDFVolume" << std::endl;
     deallocate( );
 }
 
@@ -190,7 +190,7 @@ TSDFVolumn::~TSDFVolumn() {
 /**
  * Deallocate storage for this TSDF
  */
-void TSDFVolumn::deallocate( ) {
+void TSDFVolume::deallocate( ) {
     // Remove existing data
     if ( m_distances ) {
         cudaFree( m_distances );
@@ -217,12 +217,12 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
                dim3 size, float3 origin, float3 voxel_size, float trunc_margin,
                float * voxel_grid_TSDF, float * voxel_grid_weight, float3* grid_c) {
 
-	int volumn_idx = blockIdx.x * blockDim.x + threadIdx.x;
-	if (volumn_idx < size.x * size.y * size.z){
+	int volume_idx = blockIdx.x * blockDim.x + threadIdx.x;
+	if (volume_idx < size.x * size.y * size.z){
 		// Convert voxel center from grid coordinates to base frame camera coordinates
-		float pt_base_x = grid_c[volumn_idx].x;
-		float pt_base_y = grid_c[volumn_idx].y;
-		float pt_base_z = grid_c[volumn_idx].z;
+		float pt_base_x = grid_c[volume_idx].x;
+		float pt_base_y = grid_c[volume_idx].y;
+		float pt_base_z = grid_c[volume_idx].z;
 
 		// Convert from base frame camera coordinates to current frame camera coordinates
 		float tmp_pt[3] = {0};
@@ -254,15 +254,15 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 		// Integrate
 
 		float dist = fmin(1.0f, diff / trunc_margin);
-		float weight_old = voxel_grid_weight[volumn_idx];
+		float weight_old = voxel_grid_weight[volume_idx];
 		float weight_new = weight_old + 1.0f;
-		voxel_grid_weight[volumn_idx] = weight_new;
-		voxel_grid_TSDF[volumn_idx] = (voxel_grid_TSDF[volumn_idx] * weight_old + dist) / weight_new;
+		voxel_grid_weight[volume_idx] = weight_new;
+		voxel_grid_TSDF[volume_idx] = (voxel_grid_TSDF[volume_idx] * weight_old + dist) / weight_new;
 	}
 }
 
 __host__
-void TSDFVolumn::Integrate(float* depth_map,float* cam_K, float* cam2base){
+void TSDFVolume::Integrate(float* depth_map,float* cam_K, float* cam2base){
 	float * gpu_cam_K;
 	float * gpu_cam2base;
 	float * gpu_depth_im;
@@ -286,11 +286,11 @@ void TSDFVolumn::Integrate(float* depth_map,float* cam_K, float* cam2base){
 }
  
 __host__
-void TSDFVolumn::InitSubGrid(std::vector<float3>& sg_pos, int3 sg_dims){
+void TSDFVolume::InitSubGrid(std::vector<float3>& sg_pos, int3 sg_dims){
 	float3 * temp_grid = new float3[m_size.x * m_size.y * m_size.z];
 	cudaMemcpy(temp_grid, grid_coord, m_size.x * m_size.y * m_size.z * sizeof(float3), cudaMemcpyDeviceToHost);
 	int3 grid_scale;
-	int sg_index, volumn_index;
+	int sg_index, volume_index;
 	grid_scale.x = 15; //m_size.x / sg_dims.x;
 	grid_scale.y = 15; //m_size.y / sg_dims.y;
 	grid_scale.z = 20; //m_size.z / sg_dims.z;
@@ -299,8 +299,8 @@ void TSDFVolumn::InitSubGrid(std::vector<float3>& sg_pos, int3 sg_dims){
 		for (int j = 0; j < sg_dims.y; j++) {
 			for (int k = 0; k < sg_dims.z; k++){	
 				sg_index = k * (sg_dims.y * sg_dims.x) + j * sg_dims.x + i;
-				volumn_index = k*grid_scale.z * (m_size.y * m_size.x) + j*grid_scale.y * m_size.x + i*grid_scale.x;
-				float3 tmp = temp_grid[volumn_index];
+				volume_index = k*grid_scale.z * (m_size.y * m_size.x) + j*grid_scale.y * m_size.x + i*grid_scale.x;
+				float3 tmp = temp_grid[volume_index];
 				//std::cout << "test " << i<<" "<<j<<" "<<k <<" "<<tmp.x<<" "<<tmp.y<<" "<<tmp.z<<std::endl;
 				sg_pos[sg_index] = tmp;
 			}
@@ -316,7 +316,7 @@ int index_3to1(int3 idx, int3 grid_dims)
 }
 
 __host__
-void TSDFVolumn::Upsample(std::vector<float3>& sg_pos, int3 sg_dims){
+void TSDFVolume::Upsample(std::vector<float3>& sg_pos, int3 sg_dims){
 	float3 * temp_grid = new float3[m_size.x * m_size.y * m_size.z];
 	cudaMemcpy(temp_grid, grid_coord, m_size.x * m_size.y * m_size.z * sizeof(float3), cudaMemcpyDeviceToHost);
 
