@@ -152,7 +152,7 @@ TSDFVolume::TSDFVolume(int x, int y, int z, float3 ori, float3 size){
 		origin.z = 0.5f;*/
 
 		voxel_size = size;
-		trunc_margin = voxel_size.x * 5;
+		trunc_margin = voxel_size.x * 5; //5;
 
 		int xyz = x*y*z;
 		size_t data_size = xyz * sizeof( float );
@@ -161,7 +161,7 @@ TSDFVolume::TSDFVolume(int x, int y, int z, float3 ori, float3 size){
 
 		float * voxel_grid_TSDF = new float[xyz];
 		for(int i = 0; i< xyz;i++)
-			voxel_grid_TSDF[i] = 1.0f;
+			voxel_grid_TSDF[i] = 99.0f; //1.0f; 
 		cudaMemcpy(m_distances, voxel_grid_TSDF, data_size, cudaMemcpyHostToDevice);
 		delete voxel_grid_TSDF;
 
@@ -233,7 +233,7 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 		float pt_cam_y = cam2base[0 * 4 + 1] * tmp_pt[0] + cam2base[1 * 4 + 1] * tmp_pt[1] + cam2base[2 * 4 + 1] * tmp_pt[2];
 		float pt_cam_z = cam2base[0 * 4 + 2] * tmp_pt[0] + cam2base[1 * 4 + 2] * tmp_pt[1] + cam2base[2 * 4 + 2] * tmp_pt[2];
 
-		if (pt_cam_z <= 0)
+		if (pt_cam_z <= 0) //0
 			return;
 
 		int pt_pix_x = roundf(cam_K[0 * 3 + 0] * (pt_cam_x / pt_cam_z) + cam_K[0 * 3 + 2]);
@@ -243,17 +243,26 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 
 		float depth_val = depth_im[pt_pix_y * 640 + pt_pix_x];
 
-		if (depth_val <= 0 || depth_val > 6)
+		if (depth_val <= 0 || depth_val > 1) //0, 6
 			return;
 
 		float diff = depth_val - pt_cam_z;
 
-		if (diff <= -trunc_margin)
+		if (diff <= -trunc_margin) {
+			voxel_grid_TSDF[volume_idx] = -1.0f; //voxel_grid_TSDF[volume_idx] = 99.0f; //
+			voxel_grid_weight[volume_idx] += 1.0f;
 			return;
+		}
+			
+		if ( voxel_grid_TSDF[volume_idx] >= 90.0f )	{ //90.0f
+			voxel_grid_TSDF[volume_idx] = fmin(1.0f, diff / trunc_margin); //fmin(diff, trunc_margin);
+			voxel_grid_weight[volume_idx] = 1.0f;
+			return;
+		}
 
 		// Integrate
 
-		float dist = fmin(1.0f, diff / trunc_margin);
+		float dist = fmin(1.0f, diff / trunc_margin); //fmin(diff, trunc_margin);
 		float weight_old = voxel_grid_weight[volume_idx];
 		float weight_new = weight_old + 1.0f;
 		voxel_grid_weight[volume_idx] = weight_new;
@@ -300,9 +309,8 @@ void TSDFVolume::InitSubGrid(std::vector<float3>& sg_pos, int3 sg_dims){
 			for (int k = 0; k < sg_dims.z; k++){	
 				sg_index = k * (sg_dims.y * sg_dims.x) + j * sg_dims.x + i;
 				volume_index = k*grid_scale.z * (m_size.y * m_size.x) + j*grid_scale.y * m_size.x + i*grid_scale.x;
-				float3 tmp = temp_grid[volume_index];
 				//std::cout << "test " << i<<" "<<j<<" "<<k <<" "<<tmp.x<<" "<<tmp.y<<" "<<tmp.z<<std::endl;
-				sg_pos[sg_index] = tmp;
+				sg_pos[sg_index] = temp_grid[volume_index];
 			}
 		}
 	}

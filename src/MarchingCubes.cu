@@ -119,6 +119,10 @@ uint8_t cube_type_for_values( const float values[8] ) {
 			cube_type = cube_type | mask;
 		}
 		mask = mask << 1;
+	
+		if (values[i] >=10.0f) {
+			return 0x00;
+		}
 	}
 	return cube_type;
 }

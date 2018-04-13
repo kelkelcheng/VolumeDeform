@@ -6,6 +6,9 @@
 #include "TSDFVolume.h"
 #include "MarchingCubes.h"
 
+#include <sstream>
+#include <iomanip>
+
 static SimpleMesh* createMesh(std::string filename) {
     SimpleMesh* mesh = new SimpleMesh();
     if (!OpenMesh::IO::read_mesh(*mesh, filename))
@@ -31,19 +34,24 @@ int main(int argc, const char * argv[])
 
 	std::string targetSourceDirectory = "../data/upper_body_depth";
 
-	assert(argc <= 4);
+	assert(argc <= 5);
     if (argc > 1) params.numIter = atoi(argv[1]);
-    if (argc > 2) params.nonLinearIter = atoi(argv[2]);    
-    if (argc > 3) targetSourceDirectory = argv[3];
+    //if (argc > 2) params.nonLinearIter = atoi(argv[2]);  
+	int num_frames;  
+    if (argc > 2) num_frames = atoi(argv[2]);
+	if (argc > 3) params.nonLinearIter = atoi(argv[3]);
+    if (argc > 4) params.linearIter = atoi(argv[4]);
 
-    
     //std::string sourceFilename = "../data/upperbody.ply";  
 	std::string sourceFilename = "../data/upper_body_depth/frame-000000.depth.png";
 
 	//float3 voxel_size = make_float3(0.006f, 0.006f, 0.012f);
-	float3 voxel_size = make_float3(1.0f/361.0f, 1.0f/376.0f, 0.4f/61.0f);
+	//float3 voxel_size = make_float3(1.0f/361.0f, 1.0f/376.0f, 0.4f/61.0f);
+	float3 voxel_size = make_float3(0.6f/361.0f, 0.7f/376.0f, 0.25f/61.0f);
   	//TSDFVolume volume(500,520,80, voxel_size);
-	TSDFVolume volume(361,376,61, make_float3(-0.5611f,-0.4208f, 0.65f), voxel_size);
+	//TSDFVolume volume(361,376,61, make_float3(-0.5611f,-0.4208f, 0.65f), voxel_size);
+	//TSDFVolume volume(361,376,71, make_float3(-0.5611f,-0.4208f, 0.65f), voxel_size);
+	TSDFVolume volume(361,376,61, make_float3(-0.36f,-0.26f, 0.79f), voxel_size);
 
 	float mat_K[3 * 3] = {570.342, 0, 320,  0, 570.342, 240,  0, 0, 1};
 	float world2cam[4 * 4] = {1, 0, 0, 0, 0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1};
@@ -56,6 +64,7 @@ int main(int argc, const char * argv[])
 	std::vector<int3> triangles;
 	extract_surface(volume, vertices, triangles);
 	write_to_ply("../output_mesh/after_integration0.ply",vertices,triangles);
+	//write_to_ply("../output_mesh/depth30.ply",vertices,triangles);
 
 	CombinedSolver * solver;
 	SimpleMesh * sourceMesh;
@@ -63,18 +72,28 @@ int main(int argc, const char * argv[])
     //std::vector<std::string> targetFiles = ml::Directory::enumerateFiles(targetSourceDirectory);
 	std::vector<std::string> targetFiles;
 	std::vector<std::string> target_set;
-	target_set.push_back("../data/upper_body_depth/frame-000002.depth.png");
-	target_set.push_back("../data/upper_body_depth/frame-000004.depth.png");
-	target_set.push_back("../data/upper_body_depth/frame-000006.depth.png");
-	target_set.push_back("../data/upper_body_depth/frame-000008.depth.png");
-	target_set.push_back("../data/upper_body_depth/frame-000010.depth.png");
+	std::stringstream ss;
+	SimpleMesh* res;
+
+	for (int i=1; i<num_frames; i++) {
+		ss << std::setw(6) << std::setfill('0') << i+2;
+		target_set.push_back("../data/upper_body_depth/frame-"+ss.str()+".depth.png");
+		ss.str("");
+	}
+	//target_set.push_back("../data/upper_body_depth/frame-000000.depth.png");
+
 	for (int i=0; i<target_set.size(); i++) {
 		sourceMesh = createMesh("../output_mesh/after_integration"+std::to_string(i)+".ply");
 		target_name = target_set[i];
 		targetFiles.clear();
 		targetFiles.push_back(target_name);
+		std::cout << "target mesh: " << targetFiles[0] << std::endl;
 		solver = new CombinedSolver(sourceMesh, targetFiles, params, &volume);
 		solver->solveAll();
+		// test
+		//res = solver->result();
+		//OpenMesh::IO::write_mesh(*res, "../output_mesh/out"+std::to_string(i)+".ply");
+
 		solver->update_grid();
 		volume.Upsample(*(solver->get_grid()), solver->get_grid_dims());
 		ReadDepth(target_name, im_height, im_width, depth_im);
@@ -87,6 +106,7 @@ int main(int argc, const char * argv[])
 		delete solver;
 	}
 
+	//write_to_ply("../output_mesh/after_integration_final.ply",vertices,triangles);
 	delete depth_im;
 	return 0;
 }

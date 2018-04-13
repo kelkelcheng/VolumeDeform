@@ -42,6 +42,9 @@ class CombinedSolver : public CombinedSolverBase
             // !!! New
 			m_volume = volume;
             m_gridDims = make_int3(25, 26, 4);
+			//m_gridDims = make_int3(25, 26, 8);
+			//m_gridDims = make_int3(5, 5, 3);
+
             m_dims      = m_gridDims;
 			m_dims.x--; m_dims.y--; m_dims.z--;
 			m_nNodes    = (m_dims.x + 1)*(m_dims.y + 1)*(m_dims.z + 1);
@@ -97,7 +100,7 @@ class CombinedSolver : public CombinedSolverBase
             combinedSolveInit();
             //for (auto s : m_solverInfo) {
                 //if (s.enabled) {
-                    //m_result = m_initial; //? 
+                    m_result = m_initial; //? 
                     //resetGPUMemory();
 					m_problemParams.set("G", m_graph);
 					m_problemParams.set("RegGrid", m_regGrid);
@@ -121,8 +124,8 @@ class CombinedSolver : public CombinedSolverBase
 
             m_functionTolerance = 0.0000001f;
 
-            m_fitSqrt = 1.0f;//sqrt(m_weightFit);
-            m_regSqrt = 0.8f;//sqrt(m_weightReg);
+            m_fitSqrt = sqrt(m_weightFit); //1.0f
+            m_regSqrt = sqrt(m_weightReg); //3.0f
 
             m_problemParams.set("w_fitSqrt", &m_fitSqrt);//Sqrt
             m_problemParams.set("w_regSqrt", &m_regSqrt);//Sqrt
@@ -199,7 +202,7 @@ class CombinedSolver : public CombinedSolverBase
 
         virtual void preNonlinearSolve(int) override {
             m_timer.start();
-            int newConstraintCount = setConstraints((float)m_averageEdgeLength*10.0f); //5.0f
+            int newConstraintCount = setConstraints((float)m_averageEdgeLength*10.0f); //5.0f (float)m_averageEdgeLength*10.0f
             m_timer.stop();
             double setConstraintsTime = m_timer.getElapsedTime();
             std::cout << "-- Set Constraints: " << setConstraintsTime << "s";
@@ -278,7 +281,7 @@ class CombinedSolver : public CombinedSolverBase
         // !!!!!!!!!!!! new !!!!!!!!!!!!
 
 		
-        int setConstraints(float positionThreshold = 0.03f, float cosNormalThreshold = 0.2f) //std::numeric_limits<float>::infinity()
+        int setConstraints(float positionThreshold = 0.03f, float cosNormalThreshold = 0.2f, float viewThreshold = 0.8f) //std::numeric_limits<float>::infinity() 0.03 0.2
 		{
 			unsigned int M = (unsigned int)m_result.n_vertices();
 			std::vector<float3> h_vertexPosTargetFloat3(M);
@@ -293,10 +296,9 @@ class CombinedSolver : public CombinedSolverBase
             uint thrownOutCorrespondenceCount = 0;
             float3 invalidPt = make_float3(-std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity());
 
-			std::vector<float>  h_robustWeights(M);
-            m_robustWeights->copyTo(h_robustWeights);
-
-            int constraintsUpdated = 0;
+			//std::vector<float>  h_robustWeights(M);
+            //m_robustWeights->copyTo(h_robustWeights);
+            //int constraintsUpdated = 0;
 
 			cv::Mat depth_mat = cv::imread(m_targets[m_targetIndex], CV_LOAD_IMAGE_UNCHANGED); 
 
@@ -314,12 +316,12 @@ class CombinedSolver : public CombinedSolverBase
 
 				bool validTargetFound = false;
 
-				float p_x = sourcePt.x;
-				float p_y = sourcePt.y;
-				int p_x1 = floor(sourcePt.x / sourcePt.z); 
-				int p_x2 = ceil(sourcePt.x / sourcePt.z); 
-				int p_y1 = floor(sourcePt.y / sourcePt.z);
-				int p_y2 = ceil(sourcePt.y / sourcePt.z);
+				float p_x = sourcePt.x / sourcePt.z; // edit -- sourcePt.x
+				float p_y = sourcePt.y / sourcePt.z; //
+				int p_x1 = floor(p_x); //floor(sourcePt.x / sourcePt.z); 
+				int p_x2 = p_x1 + 1;//ceil(sourcePt.x / sourcePt.z); 
+				int p_y1 = floor(p_y);//floor(sourcePt.y / sourcePt.z);
+				int p_y2 = p_y1 + 1;//ceil(sourcePt.y / sourcePt.z);
 
 				if (p_x1>=0 && p_x2<640-1 && p_y1>=0 && p_y2<480-1)
 				{
@@ -329,56 +331,70 @@ class CombinedSolver : public CombinedSolverBase
 					float p_z21 = (float)(depth_mat.at<unsigned short>(p_y1, p_x2)) / 1000.0f;
 					float p_z22 = (float)(depth_mat.at<unsigned short>(p_y2, p_x2)) / 1000.0f;
 
-					if (p_z11 <=1.0f && p_z12 <=1.0f && p_z21 <=1.0f && p_z22 <=1.0f) 
+					if (p_z11>0.0f && p_z12 >0.0f && p_z21 >0.0f && p_z22 >0.0f) //p_z11 <=1.0f && p_z12 <=1.0f && p_z21 <=1.0f && p_z22 <=1.0f
 					{
 						// use bilinear interpolation to get the depth
+						/*float p_x11 = p_x1 * p_z11; float p_y11 = p_y1 * p_z11; 
+						float p_x12 = p_x1 * p_z12; float p_y12 = p_y2 * p_z12; 
+						float p_x21 = p_x2 * p_z21; float p_y21 = p_y1 * p_z21; 
+						float p_x22 = p_x2 * p_z22; float p_y22 = p_y2 * p_z22;				 
+
 						float p_z1 = (p_x2-p_x)/(p_x2-p_x1)*p_z11 + (p_x-p_x1)/(p_x2-p_x1)*p_z21;
 						float p_z2 = (p_x2-p_x)/(p_x2-p_x1)*p_z12 + (p_x-p_x1)/(p_x2-p_x1)*p_z22;
-						float p_z = (p_y2-p_y)/(p_y2-p_y1)*p_z1 + (p_y-p_y1)/(p_y2-p_y1)*p_z2;
+						float p_z = (p_y2-p_y)/(p_y2-p_y1)*p_z1 + (p_y-p_y1)/(p_y2-p_y1)*p_z2;*/
 					
 						// project back to world coordinate
-						float3 target = make_float3(p_x, p_y, p_z);
+						//float3 target = make_float3(p_x, p_y, p_z); 
+
+						//p_x = (int)round(p_x); p_y = (int)round(p_y);
+						//float p_z = (float)(depth_mat.at<unsigned short>(p_y, p_x));
+						//float3 target = make_float3(p_x * p_z, p_y * p_z, p_z);
+						float3 target = make_float3(p_x1*p_z11, p_y1*p_z11, p_z11);
 						vecTrans(target, mat_K_inv);
 
 						// construct normal
 						const Vec3f targetPt = Vec3f(target.x, target.y, target.z);
 
 						// update depth value if the point falls on axis
-						if (p_x1 == p_x2) {p_x2 = p_x1 + 1;}
+						/*if (p_x1 == p_x2) {p_x2 = p_x1 + 1;}
 						if (p_y1 == p_y2) {p_y2 = p_y1 + 1;}
 						p_z12 = (float)(depth_mat.at<unsigned short>(p_y2, p_x1)) / 1000.0f;
 						p_z21 = (float)(depth_mat.at<unsigned short>(p_y1, p_x2)) / 1000.0f;
 						p_z22 = (float)(depth_mat.at<unsigned short>(p_y2, p_x2)) / 1000.0f;		
 						// determine which triangle the point belongs to and get the u,v vectors for calculating normal
-						//float uVec[3] = {p_x2*p_z22-p_x1*p_z11, p_y2*p_z22-p_y1*p_z11, p_z22-p_z11};
-						//float vVec[3] = {p_x2*p_z21-p_x1*p_z12, p_y1*p_z21-p_y2*p_z12, p_z21-p_z12}; 
-						float uVec[3]; float vVec[3];
+						float3 uVec; float3 vVec;
 						if (p_y <= (-1*p_x+1)) {
-							uVec[0] = p_x2*p_z21-p_x1*p_z11; uVec[1] = p_y1*p_z21-p_y1*p_z11; uVec[2] = p_z21-p_z11;
-							vVec[0] = p_x1*p_z12-p_x1*p_z11; vVec[1] = p_y2*p_z12-p_y1*p_z11; vVec[2] = p_z12-p_z11;							
+							uVec.x = p_x2*p_z21-p_x1*p_z11; uVec.y = p_y1*p_z21-p_y1*p_z11; uVec.z = p_z21-p_z11;
+							vVec.x = p_x1*p_z12-p_x1*p_z11; vVec.y = p_y2*p_z12-p_y1*p_z11; vVec.z = p_z12-p_z11;							
 						}
 						else {
-							uVec[0] = p_x2*p_z21-p_x2*p_z22; uVec[1] = p_y1*p_z21-p_y2*p_z21; uVec[2] = p_z21-p_z22;
-							vVec[0] = p_x1*p_z12-p_x2*p_z22; vVec[1] = p_y2*p_z12-p_y2*p_z22; vVec[2] = p_z12-p_z12;							
-						}
-						/*p_x1 = (int)round(p_x1);  p_x2 = p_x1 + 1;
-						p_y1 = (int)round(p_y1);  p_y2 = p_y1 + 1;
+							uVec.x = p_x2*p_z21-p_x2*p_z22; uVec.y = p_y1*p_z21-p_y2*p_z21; uVec.z = p_z21-p_z22;
+							vVec.x = p_x1*p_z12-p_x2*p_z22; vVec.y = p_y2*p_z12-p_y2*p_z22; vVec.z = p_z12-p_z12;							
+						}*/
+
+						/*p_x1 = (int)floor(p_x1);  p_x2 = p_x1 + 1;
+						p_y1 = (int)floor(p_y1);  p_y2 = p_y1 + 1;
 						p_z11 = (float)(depth_mat.at<unsigned short>(p_y1, p_x1)) / 1000.0f;
 						p_z12 = (float)(depth_mat.at<unsigned short>(p_y2, p_x1)) / 1000.0f;
-						p_z21 = (float)(depth_mat.at<unsigned short>(p_y1, p_x2)) / 1000.0f;
-						float uVec[3]; float vVec[3];
-						uVec[0] = p_x2*p_z21-p_x1*p_z11; uVec[1] = p_y1*p_z21-p_y1*p_z11; uVec[2] = p_z21-p_z11;
-						vVec[0] = p_x1*p_z12-p_x1*p_z11; vVec[1] = p_y2*p_z12-p_y1*p_z11; vVec[2] = p_z12-p_z11;*/					
-
-
+						p_z21 = (float)(depth_mat.at<unsigned short>(p_y1, p_x2)) / 1000.0f;*/
+						float3 uVec; float3 vVec;	
+						uVec.x = p_x2*p_z21-p_x1*p_z11; uVec.y = p_y1*p_z21-p_y1*p_z11; uVec.z = p_z21-p_z11;
+						vVec.x = p_x1*p_z12-p_x1*p_z11; vVec.y = p_y2*p_z12-p_y1*p_z11; vVec.z = p_z12-p_z11;
+				
+						vecTrans(uVec, mat_K_inv); vecTrans(vVec, mat_K_inv);
 						// calculate unit normal
-						float3 normVec = make_float3(uVec[1]*vVec[2]-uVec[2]*vVec[1], uVec[2]*vVec[0]-uVec[0]*vVec[2], uVec[0]*vVec[1]-uVec[1]*vVec[0]);
-						vecTrans(normVec, mat_K_inv);
-						float mag = normVec.x*normVec.x + normVec.y*normVec.y + normVec.z*normVec.z;
+						//float3 normVec = make_float3(uVec[1]*vVec[2]-uVec[2]*vVec[1], uVec[2]*vVec[0]-uVec[0]*vVec[2], uVec[0]*vVec[1]-uVec[1]*vVec[0]);
+						float3 normVec = make_float3(uVec.y*vVec.z-uVec.z*vVec.y, uVec.z*vVec.x-uVec.x*vVec.z, uVec.x*vVec.y-uVec.y*vVec.x);
+						//vecTrans(normVec, mat_K_inv);
+						float mag = sqrt(normVec.x*normVec.x + normVec.y*normVec.y + normVec.z*normVec.z);
 						normVec.x /= mag; normVec.y /= mag; normVec.z /= mag;
 
 						float dist = (targetPt - currentPt).length();
 
+						// New
+						if (dot(normVec, sourceNormal) < 0) {
+							normVec.x = -normVec.x; normVec.y = -normVec.y; normVec.z = -normVec.z; 
+						}
 
 		                if (dist < positionThreshold) {
 							/*if (testCount < 10) {
@@ -396,6 +412,7 @@ class CombinedSolver : public CombinedSolverBase
 								h_vertexNormalTargetFloat3[i] = normVec;
 				                validTargetFound = true;
 				            }
+
 						}
 					}
 				}
@@ -403,8 +420,46 @@ class CombinedSolver : public CombinedSolverBase
                 if (!validTargetFound) {
                     ++thrownOutCorrespondenceCount;
                     h_vertexPosTargetFloat3[i] = invalidPt;
+					//h_vertexNormalTargetFloat3[i] = make_float3(0.0f, 0.0f, 0.0f);
+					//h_robustWeights[i] = 0.0f;
                 }
 
+                /*if (m_previousConstraints[i] != h_vertexPosTargetFloat3[i]) {
+                    m_previousConstraints[i] = h_vertexPosTargetFloat3[i];
+                    ++constraintsUpdated;
+                    
+                    auto currentPt = m_result.point(VertexHandle(i));
+                    auto v = h_vertexPosTargetFloat3[i];
+                    const Vec3f target = Vec3f(v.x, v.y, v.z);
+                    float dist = (target - currentPt).length();
+
+					float weight_d = 1.0f - dist / positionThreshold;
+					float weight_n = 1.0f - (1.0f - dot(h_vertexNormalTargetFloat3[i], sourceNormal)) / cosNormalThreshold;
+
+					float3 camera_view = make_float3(-0.4594f, -0.3445f, 0.8187f);
+					float weight_v = 1.0f - (1.0f - dot(h_vertexNormalTargetFloat3[i], camera_view)) / viewThreshold;
+
+					if (weight_d >= 0) { //&& weight_n >= 0 && weight_v >= 0
+						//float weight = (weight_d + weight_n + weight_v) / 3;
+						float weight = weight_d;
+						h_robustWeights[i] = fmaxf(0.1f, weight*0.9f+0.05f); //weight*0.9f+0.05f
+					} else {
+						h_robustWeights[i] = 0.1f;
+					}
+
+                    float weight = (positionThreshold - dist) / positionThreshold;
+                    h_robustWeights[i] = fmaxf(0.1f, weight*0.9f+0.05f); //weight*weight
+                }*/
+			}
+
+
+            m_vertexPosTargetFloat3->update(h_vertexPosTargetFloat3);
+            m_vertexNormalTargetFloat3->update(h_vertexNormalTargetFloat3);
+
+            std::vector<float>  h_robustWeights(M);
+            m_robustWeights->copyTo(h_robustWeights);
+            int constraintsUpdated = 0;
+            for (int i = 0; i < (int)M; ++i) {
                 if (m_previousConstraints[i] != h_vertexPosTargetFloat3[i]) {
                     m_previousConstraints[i] = h_vertexPosTargetFloat3[i];
                     ++constraintsUpdated;
@@ -415,15 +470,14 @@ class CombinedSolver : public CombinedSolverBase
                         float dist = (target - currentPt).length();
                         float weight = (positionThreshold - dist) / positionThreshold;
 						
-                        h_robustWeights[i] = fmaxf(0.1f, weight*0.9f+0.05f); //weight*weight
-						//h_robustWeights[i] = fmaxf(0.01f, weight*0.99f+0.005f);
+                        //h_robustWeights[i] = fmaxf(0.1f, weight*0.9f+0.05f); //weight*weight
+						h_robustWeights[i] = fmaxf(0.01f, weight*0.99f+0.005f);
+                        //h_robustWeights[i] = 1.0f;
                     }
                 }
-			}
+            }
 
 
-            m_vertexPosTargetFloat3->update(h_vertexPosTargetFloat3);
-            m_vertexNormalTargetFloat3->update(h_vertexNormalTargetFloat3);
             m_robustWeights->update(h_robustWeights);
 
             std::cout << "*******Thrown out correspondence count: " << thrownOutCorrespondenceCount << std::endl;
@@ -459,7 +513,7 @@ class CombinedSolver : public CombinedSolverBase
             std::vector<int> regGrid_v0;
             std::vector<int> regGrid_v1;
 
-			//std::vector<float3> h_gridVertexPosFloat3(m_nNodes);
+			//std::vector<float3> h_gridVertexPosFloat3(m_nNodes);//
 			h_gridVertexPosFloat3.resize(m_nNodes);
 			m_volume->InitSubGrid(h_gridVertexPosFloat3, m_gridDims);
 			for (int i = 0; i <= m_dims.x; i++)
@@ -468,10 +522,10 @@ class CombinedSolver : public CombinedSolverBase
 				{
 					for (int k = 0; k <= m_dims.z; k++)
 					{
-						//float3 fac = make_float3((float)i, (float)j, (float)k);
-						//float3 v = m_min + fac*m_delta;
+						//float3 fac = make_float3((float)i, (float)j, (float)k);//
+						//float3 v = m_min + fac*m_delta;//
 						int3 gridIdx = make_int3(i, j, k);
-						//h_gridVertexPosFloat3[getIndex1D(gridIdx)] = v;
+						//h_gridVertexPosFloat3[getIndex1D(gridIdx)] = v;//
 						
 
 						if (k!=m_dims.z) { 
@@ -516,6 +570,8 @@ class CombinedSolver : public CombinedSolverBase
 
 		void resetGPUMemory()
 		{
+			//computeBoundingBox();
+			//m_delta = (m_max - m_min); m_delta.x /= (m_dims.x); m_delta.y /= (m_dims.y); m_delta.z /= (m_dims.z);
 			initializeWarpGrid();
 
 			/*m_min = make_float3(+std::numeric_limits<float>::max(), +std::numeric_limits<float>::max(), +std::numeric_limits<float>::max());
@@ -581,8 +637,8 @@ class CombinedSolver : public CombinedSolverBase
 			m_graph = std::make_shared<OptGraph>(std::vector<std::vector<int> >({ w, v1, v2, v3, v4, v5, v6, v7, v8, w, w, w}));
 
 			//initAngle(m_anglesFloat3->data(), m_nNodes);
-			copyResultToCPUFromFloat3();
-			OpenMesh::IO::write_mesh(m_result, "../output_mesh/test_subgrid.ply");
+			//copyResultToCPUFromFloat3();
+			//OpenMesh::IO::write_mesh(m_result, "../output_mesh/test_subgrid.ply");
 		}
 
         SimpleMesh* result()
@@ -820,10 +876,18 @@ class CombinedSolver : public CombinedSolverBase
 			{0, 0, 0, 1}
 		};
 
+		/*float mat_K_inv[4][4] =
+		{
+			{0.0018, 0, -0.5611, 0}, //0.00175333
+			{0, 0.0018, -0.4208, 0},
+			{0, 0, 1, 0},
+			{0, 0, 0, 1}
+		};*/
+
 		float mat_K_inv[4][4] =
 		{
-			{0.0018, 0, -0.5611, 0},
-			{0, 0.0018, -0.4208, 0},
+			{0.00175333, 0, -0.561066, 0}, //
+			{0, 0.00175333, -0.4208001, 0},
 			{0, 0, 1, 0},
 			{0, 0, 0, 1}
 		};
