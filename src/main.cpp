@@ -2,7 +2,7 @@
 #include "CombinedSolver.h"
 #include "OpenMesh.h"
 
-#include "utils.hpp"
+//#include "utils.hpp"
 #include "TSDFVolume.h"
 #include "MarchingCubes.h"
 
@@ -46,12 +46,12 @@ int main(int argc, const char * argv[])
 	std::string sourceFilename = "../data/upper_body_depth/frame-000000.depth.png";
 
 	//float3 voxel_size = make_float3(0.006f, 0.006f, 0.012f);
-	//float3 voxel_size = make_float3(1.0f/361.0f, 1.0f/376.0f, 0.4f/61.0f);
-	float3 voxel_size = make_float3(0.6f/361.0f, 0.7f/376.0f, 0.25f/61.0f);
+	float3 voxel_size = make_float3(1.0f/361.0f, 1.0f/376.0f, 0.4f/61.0f);
+	//float3 voxel_size = make_float3(0.6f/361.0f, 0.7f/376.0f, 0.25f/61.0f);
   	//TSDFVolume volume(500,520,80, voxel_size);
-	//TSDFVolume volume(361,376,61, make_float3(-0.5611f,-0.4208f, 0.65f), voxel_size);
+	TSDFVolume volume(361,376,61, make_float3(-0.5611f,-0.4208f, 0.65f), voxel_size);
 	//TSDFVolume volume(361,376,71, make_float3(-0.5611f,-0.4208f, 0.65f), voxel_size);
-	TSDFVolume volume(361,376,61, make_float3(-0.36f,-0.26f, 0.79f), voxel_size);
+	//TSDFVolume volume(361,376,61, make_float3(-0.36f,-0.26f, 0.79f), voxel_size);
 
 	float mat_K[3 * 3] = {570.342, 0, 320,  0, 570.342, 240,  0, 0, 1};
 	float world2cam[4 * 4] = {1, 0, 0, 0, 0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1};
@@ -60,9 +60,10 @@ int main(int argc, const char * argv[])
 	float* depth_im = new float[im_height * im_width];
 	ReadDepth(sourceFilename, im_height, im_width, depth_im);
 	volume.Integrate(depth_im, mat_K, world2cam);
-	std::vector<float3> vertices ;
+	std::vector<float3> vertices;
 	std::vector<int3> triangles;
-	extract_surface(volume, vertices, triangles);
+	std::vector<float3> normals;
+	extract_surface(volume, vertices, triangles, normals);
 	write_to_ply("../output_mesh/after_integration0.ply",vertices,triangles);
 	//write_to_ply("../output_mesh/depth30.ply",vertices,triangles);
 
@@ -76,19 +77,28 @@ int main(int argc, const char * argv[])
 	SimpleMesh* res;
 
 	for (int i=1; i<num_frames; i++) {
-		ss << std::setw(6) << std::setfill('0') << i+2;
+		ss << std::setw(6) << std::setfill('0') << i;
 		target_set.push_back("../data/upper_body_depth/frame-"+ss.str()+".depth.png");
 		ss.str("");
 	}
-	//target_set.push_back("../data/upper_body_depth/frame-000000.depth.png");
+	//target_set.push_back("../data/upper_body_depth/frame-000110.depth.png");
+	//target_set.push_back("../data/upper_body_depth/frame-000115.depth.png");
+	//target_set.push_back("../data/upper_body_depth/frame-000150.depth.png");
 
+	
+	sourceMesh = createMesh("../output_mesh/after_integration"+std::to_string(0)+".ply");
+	solver = new CombinedSolver(sourceMesh, target_set, params, &volume, &vertices, &normals, &triangles);
+	//solver->solveAll();
+		
 	for (int i=0; i<target_set.size(); i++) {
-		sourceMesh = createMesh("../output_mesh/after_integration"+std::to_string(i)+".ply");
+		//sourceMesh = createMesh("../output_mesh/after_integration"+std::to_string(i)+".ply");
 		target_name = target_set[i];
 		targetFiles.clear();
 		targetFiles.push_back(target_name);
 		std::cout << "target mesh: " << targetFiles[0] << std::endl;
-		solver = new CombinedSolver(sourceMesh, targetFiles, params, &volume);
+		//solver = new CombinedSolver(sourceMesh, targetFiles, params, &volume, &vertices, &normals, &triangles);
+		solver->set_targets(targetFiles);
+		solver->set_vnt(&vertices, &normals, &triangles);
 		solver->solveAll();
 		// test
 		//res = solver->result();
@@ -98,15 +108,17 @@ int main(int argc, const char * argv[])
 		volume.Upsample(*(solver->get_grid()), solver->get_grid_dims());
 		ReadDepth(target_name, im_height, im_width, depth_im);
 		volume.Integrate(depth_im, mat_K, world2cam);
-		vertices.clear(); triangles.clear();
-		extract_surface(volume, vertices, triangles);
-		write_to_ply("../output_mesh/after_integration"+std::to_string(i+1)+".ply",vertices,triangles);
+		vertices.clear(); triangles.clear(); normals.clear();
+		extract_surface(volume, vertices, triangles, normals);
+		//write_to_ply("../output_mesh/after_integration"+std::to_string(i+1)+".ply",vertices,triangles);
 		//solver->saveGraphResults();
-		delete sourceMesh;
-		delete solver;
+		//delete sourceMesh;
+		//delete solver;
 	}
-
-	//write_to_ply("../output_mesh/after_integration_final.ply",vertices,triangles);
+	//solver->saveGraphResults();
+	write_to_ply("../output_mesh/after_integration_final.ply",vertices,triangles);
+	delete sourceMesh;
+	delete solver;
 	delete depth_im;
 	return 0;
 }

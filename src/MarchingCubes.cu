@@ -1,10 +1,10 @@
 #include <iostream>
 #include "MarchingCubes.h"
 #include "GPUTiktok.h"
-//#include "MC_edge_table.cu"
-//#include "MC_triangle_table.cu"
 #include "MC_table.cu"
 #include "cudaUtil.h"
+#include <math.h>
+
 using namespace std;
 
 #define CUDART_NAN_F            __int_as_float(0x7fffffff)
@@ -224,11 +224,15 @@ void process_kernel_output( dim3 size,
 							const float3          * h_vertices,
                             const int3            * h_triangles,
                             vector<float3>&    vertices,
-                            vector<int3>&      triangles) {
+                            vector<int3>&      triangles,
+							vector<float3>&	   normals) {
 	
+	// test
+	int test_count = 0;
 
 	// For all but last row of voxels
 	int cube_index = 0;
+	
 	for ( int y = 0; y < size.y - 1; y++ ) {
 
 		// For all but last column of voxels
@@ -240,6 +244,7 @@ void process_kernel_output( dim3 size,
 
 			// Iterate until we have 5 triangles or there are none left
 			int tri_index = 0;
+			int v_start = vertices.size();
 			while ( ( tri_index < 5) && ( tris[tri_index].x != -1 ) ) {
 
 				// Get the raw vertex IDs
@@ -248,22 +253,43 @@ void process_kernel_output( dim3 size,
 				tri_vertices[1] = tris[tri_index].y;
 				tri_vertices[2] = tris[tri_index].z;
 
+				// calculate per-vertex normal
+				float3 uVec = verts[tri_vertices[1]] - verts[tri_vertices[0]];//make_float3(verts[1].x - verts[0].x, verts[1].y - verts[0].y, verts[1].z - verts[0].z);//
+				float3 vVec = verts[tri_vertices[2]] - verts[tri_vertices[0]];//make_float3(verts[2].x - verts[0].x, verts[2].y - verts[0].y, verts[2].z - verts[0].z);//
+				float3 v_norm = make_float3(uVec.y*vVec.z-uVec.z*vVec.y, uVec.z*vVec.x-uVec.x*vVec.z, uVec.x*vVec.y-uVec.y*vVec.x);
+				//float mag = sqrt(v_norm.x * v_norm.x + v_norm.y * v_norm.y + v_norm.z * v_norm.z);
+				//v_norm.x /= mag; v_norm.y /= mag; v_norm.z /= mag;
+				if (v_norm.z > 0) {
+					v_norm.x = -v_norm.x; v_norm.y = -v_norm.y; v_norm.z = -v_norm.z;
+				}
+				
+				//test
+				/*if (test_count < 10) {
+					if (!std::isnan(uVec.x) && !std::isnan(vVec.x)) {
+						std::cout << "uVec.x " << uVec.x << " uVec.y " << uVec.y << " uVec.z " << uVec.z << std::endl;
+						std::cout << "vVec.x " << vVec.x << " vVec.y " << vVec.y << " vVec.z " << vVec.z << std::endl;
+						std::cout << "v_norm.x " << v_norm.x << " v_norm.y " << v_norm.y << " v_norm.z " << v_norm.z << std::endl;
+						test_count++;
+					}
+				}*/
 
 				// Remap triangle vertex indices to global indices
 				int remap[] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
 				for ( int tv = 0; tv < 3; tv++ ) {
-
 					int vid = tri_vertices[tv];
 					int vertexid = remap[ vid ];
 					if ( vertexid == -1 ) {
 						// This vertex hasnt been remapped (ie stored) yet
 						vertices.push_back( verts[ vid ] );
+						normals.push_back( v_norm );
 
 						// Get the new ID
 						vertexid = vertices.size() - 1;
 
 						// And enter in remap table
 						remap[ vid ] = vertexid;
+					} else {
+						normals[vertexid] += v_norm;
 					}
 					tri_vertices[tv] = vertexid;
 				}
@@ -274,6 +300,11 @@ void process_kernel_output( dim3 size,
 
 				tri_index++;
 			}
+		
+			for (int i = v_start; i<vertices.size(); i++){
+				float mag = sqrt(normals[i].x*normals[i].x + normals[i].y*normals[i].y + normals[i].z*normals[i].z);
+				normals[i].x /= mag; normals[i].y /= mag; normals[i].z /= mag;
+			}
 			cube_index++;
 		}
 	}
@@ -281,7 +312,7 @@ void process_kernel_output( dim3 size,
 }
 
 __host__
-void extract_surface(TSDFVolume & volume, vector<float3>& vertices, vector<int3>& triangles){
+void extract_surface(TSDFVolume & volume, vector<float3>& vertices, vector<int3>& triangles, vector<float3>& normals){
 	// Allocate storage on device and locally
 	// Fail if not possible
 	dim3 size = volume.get_size();
@@ -370,7 +401,7 @@ void extract_surface(TSDFVolume & volume, vector<float3>& vertices, vector<int3>
 		
 
 		// All through all the triangles and vertices and add them to master lists
-		process_kernel_output(size, h_vertices, h_triangles, vertices, triangles);
+		process_kernel_output(size, h_vertices, h_triangles, vertices, triangles, normals);
 		
 	}
 	clock.tok();

@@ -4,7 +4,7 @@
 #include "TSDFVolume.h"
 #include <vector>
 
-void extract_surface(TSDFVolume & volume, std::vector<float3>& vertices, std::vector<int3>& triangles);
+void extract_surface(TSDFVolume & volume, std::vector<float3>& vertices, std::vector<int3>& triangles, std::vector<float3>& normals);
 
 
 #endif

@@ -13,6 +13,9 @@
 
 #include <math.h>
 #include "TSDFVolume.h"
+#include "utils.hpp"
+#include "MarchingCubes.h"
+//#include "cudaUtil.h"
 // just for testing purpose
 //extern "C" void initAngle(void* ptr_angles, unsigned int m_nNodes);
 
@@ -23,6 +26,12 @@ static bool operator==(const float3& v0, const float3& v1) {
 static bool operator!=(const float3& v0, const float3& v1) {
     return !(v0 == v1);
 }
+
+float get_length(const float3& v) {
+    return sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+}
+
+
 #define MAX_K 20
 
 static float clamp(float v, float mn, float mx) {
@@ -33,14 +42,18 @@ class CombinedSolver : public CombinedSolverBase
 {
 
 	public:
-        CombinedSolver(const SimpleMesh* sourceMesh, const std::vector<std::string> targetFiles, CombinedSolverParameters params, TSDFVolume* volume)
+        CombinedSolver(const SimpleMesh* sourceMesh, const std::vector<std::string> targetFiles, CombinedSolverParameters params, TSDFVolume* volume, vector<float3>* vertices, vector<float3>* normals, vector<int3>* triangles)
 		{
             m_combinedSolverParameters = params;
-            m_result = *sourceMesh;
-			m_initial = m_result;
+            //m_result = *sourceMesh;
+			//m_initial = m_result;
 			m_targets = targetFiles;
             // !!! New
 			m_volume = volume;
+			m_vertices = vertices;
+			m_normals = normals;
+			m_triangles = triangles;
+
             m_gridDims = make_int3(25, 26, 4);
 			//m_gridDims = make_int3(25, 26, 8);
 			//m_gridDims = make_int3(5, 5, 3);
@@ -49,24 +62,26 @@ class CombinedSolver : public CombinedSolverBase
 			m_dims.x--; m_dims.y--; m_dims.z--;
 			m_nNodes    = (m_dims.x + 1)*(m_dims.y + 1)*(m_dims.z + 1);
 
-            uint M = (uint)sourceMesh->n_vertices();
-            uint E = (uint)sourceMesh->n_edges();
+            //uint M = (uint)sourceMesh->n_vertices();
+            //uint E = (uint)sourceMesh->n_edges();
 
             // !!! New
-            m_M = M;
-			m_vertexToVoxels.resize(M);
-            m_relativeCoords.resize(M);
+            m_M = (*m_vertices).size();//M;
+			m_vertexToVoxels.resize(m_M);
+            m_relativeCoords.resize(m_M);
             
-            double sumEdgeLength = 0.0f;
-            for (auto edgeHandle : m_initial.edges()) {
-                auto edge = m_initial.edge(edgeHandle);
-                sumEdgeLength += m_initial.calc_edge_length(edgeHandle);
+            /*double sumEdgeLength = 0.0f;
+            for (auto edgeHandle : (*sourceMesh).edges()) {
+                auto edge = (*sourceMesh).edge(edgeHandle);
+                sumEdgeLength += (*sourceMesh).calc_edge_length(edgeHandle);
             }
             m_averageEdgeLength = sumEdgeLength / E;
-            std::cout << "Average Edge Length: " << m_averageEdgeLength << std::endl;
+            std::cout << "Average Edge Length: " << m_averageEdgeLength << std::endl;*/
+            
+            
 			std::cout << "dim.x: " << m_dims.x <<" dim.y: "<<m_dims.y<<" dim.z: " <<m_dims.z << std::endl;
 
-            std::vector<unsigned int> dims = { M };
+            std::vector<unsigned int> dims = { m_M };
 			std::vector<unsigned int> dims_grid = { (uint)m_nNodes };
 
             m_vertexPosTargetFloat3     = createEmptyOptImage(dims, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
@@ -77,9 +92,11 @@ class CombinedSolver : public CombinedSolverBase
             m_anglesFloat3              = createEmptyOptImage(dims_grid, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
 			m_triWeights              	= createEmptyOptImage(dims, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
 
-			resetGPUMemory();   
 
-            if (!m_result.has_vertex_colors()) {
+			initializeWarpGrid();		
+			//resetGPUMemory();   
+
+            /*if (!m_result.has_vertex_colors()) {
                 m_result.request_vertex_colors();
             }
 
@@ -87,31 +104,11 @@ class CombinedSolver : public CombinedSolverBase
             {
                 uchar w = 255;
                 m_result.set_color(VertexHandle(i), Vec3uc(w, w, w));
-            }
+            }*/
 
 			addOptSolvers(dims, "opt_rotation.t", m_combinedSolverParameters.optDoublePrecision);
             addOptSolvers(dims, "opt_position.t", m_combinedSolverParameters.optDoublePrecision);
-
-			//addOptSolvers(dims, "opt_both.t", m_combinedSolverParameters.optDoublePrecision);
-            //addOptSolvers(dims, "opt_both.t", m_combinedSolverParameters.optDoublePrecision);		
 		} 
-
-        virtual void solveAll() override {
-            combinedSolveInit();
-            //for (auto s : m_solverInfo) {
-                //if (s.enabled) {
-                    m_result = m_initial; //? 
-                    //resetGPUMemory();
-					m_problemParams.set("G", m_graph);
-					m_problemParams.set("RegGrid", m_regGrid);
-                    for (m_targetIndex = 0; m_targetIndex < m_targets.size(); ++m_targetIndex) {
-                        //singleSolve(s); //Edit!!
-						singleSolve(m_solverInfo[0], m_solverInfo[1]); // New!!!
-                    }
-                //}
-            //}
-            combinedSolveFinalize();
-        }
 
         virtual void combinedSolveInit() override {
             m_weightFit = 10.0f; 
@@ -144,8 +141,34 @@ class CombinedSolver : public CombinedSolverBase
             m_solverParams.set("lIterations", &m_combinedSolverParameters.linearIter);
             m_solverParams.set("function_tolerance", &m_functionTolerance);
         }
+
+        virtual void solveAll() override {
+            combinedSolveInit();
+
+            resetGPUMemory();
+			m_problemParams.set("G", m_graph); // check why it is required to set it again
+			m_problemParams.set("RegGrid", m_regGrid);
+			float* depth_im = new float[480 * 640];
+			float K[3 * 3] = {570.342, 0, 320,  0, 570.342, 240,  0, 0, 1};
+			float world2cam[4 * 4] = {1, 0, 0, 0, 0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1};
 			
-		// New!!!
+            for (m_targetIndex = 0; m_targetIndex < m_targets.size(); ++m_targetIndex) {
+                //singleSolve(s); 
+                if (m_targetIndex!=0) resetGPUMemory();
+				singleSolve(m_solverInfo[0], m_solverInfo[1]); 
+				//update_grid();
+				
+				/*m_volume->Upsample(h_gridVertexPosFloat3,  m_gridDims);
+				ReadDepth(m_targets[m_targetIndex], 480, 640, depth_im);
+				m_volume->Integrate(depth_im, K, world2cam);
+				m_vertices->clear(); m_triangles->clear(); m_normals->clear();
+				extract_surface((*m_volume), (*m_vertices), (*m_triangles), (*m_normals));
+				write_to_ply("../output_mesh/inner_integration"+std::to_string(m_targetIndex+1)+".ply", (*m_vertices),(*m_triangles));*/
+            }
+			delete depth_im;
+            combinedSolveFinalize();
+        }
+        			
 		virtual void singleSolve(SolverInfo s0, SolverInfo s1) {
 		    preSingleSolve();
 		    if (m_combinedSolverParameters.numIter == 1) {
@@ -187,7 +210,7 @@ class CombinedSolver : public CombinedSolverBase
 		}
 
         virtual void preSingleSolve() override {
-            unsigned int M = (unsigned int)m_initial.n_vertices();
+            unsigned int M = (unsigned int)(*m_vertices).size();//m_initial.n_vertices();
             m_previousConstraints.resize(M);
             for (int i = 0; i < (int)M; ++i) {
                 m_previousConstraints[i] = make_float3(0, 0, -90901283092183);
@@ -197,12 +220,12 @@ class CombinedSolver : public CombinedSolverBase
         virtual void postSingleSolve() override { 
             char buff[100];
             sprintf(buff, "../output_mesh/out_%04d.ply", m_targetIndex);
-            saveCurrentMesh(buff);
+            //saveCurrentMesh(buff);        
         }
 
         virtual void preNonlinearSolve(int) override {
             m_timer.start();
-            int newConstraintCount = setConstraints((float)m_averageEdgeLength*10.0f); //5.0f (float)m_averageEdgeLength*10.0f
+            int newConstraintCount = setConstraints(0.022); //5.0f (float)m_averageEdgeLength*10.0f
             m_timer.stop();
             double setConstraintsTime = m_timer.getElapsedTime();
             std::cout << "-- Set Constraints: " << setConstraintsTime << "s";
@@ -239,7 +262,7 @@ class CombinedSolver : public CombinedSolverBase
             return BaseImageHelper::convertHSVtoRGB(vec3f(240.0f*x, 1.0f, 0.5f));
         }
 
-        void saveCurrentMesh(std::string filename) {
+        /*void saveCurrentMesh(std::string filename) {
             { // Save intermediate mesh
                 unsigned int M = (unsigned int)m_result.n_vertices();
                 std::vector<float> h_vertexWeightFloat(M);
@@ -249,17 +272,13 @@ class CombinedSolver : public CombinedSolverBase
                     vec3f color = convertDepthToRGB(1.0f-clamp(h_vertexWeightFloat[i], 0.0f, 1.0f));
 
                     m_result.set_color(VertexHandle(i), Vec3uc((uchar)(color.r * 255), (uchar)(color.g * 255), (uchar)(color.b * 255)));
-
-                    /*if (h_vertexWeightFloat[i] < 0.9f || h_vertexWeightFloat[i] > 1.0f) {
-                        printf("Interesting robustWeight[%d]: %f\n", i, h_vertexWeightFloat[i]);
-                    }*/
                 }
                 
                 OpenMesh::IO::Options options = OpenMesh::IO::Options::VertexColor;
                 int failure = OpenMesh::IO::write_mesh(m_result, filename, options);
                 assert(failure);
             }
-        }
+        }*/
 
         // !!!!!!!!!!!! new !!!!!!!!!!!!
 		/*int getIndex1D(int3 idx)
@@ -283,45 +302,41 @@ class CombinedSolver : public CombinedSolverBase
 		
         int setConstraints(float positionThreshold = 0.03f, float cosNormalThreshold = 0.2f, float viewThreshold = 0.8f) //std::numeric_limits<float>::infinity() 0.03 0.2
 		{
-			unsigned int M = (unsigned int)m_result.n_vertices();
+			//unsigned int M = (unsigned int)m_result.n_vertices();
+			unsigned int M = (unsigned int)(*m_vertices).size();
 			std::vector<float3> h_vertexPosTargetFloat3(M);
             std::vector<float3> h_vertexNormalTargetFloat3(M);
-
-            if (!(m_result.has_face_normals() && m_result.has_vertex_normals())) {
-                m_result.request_face_normals();
-                m_result.request_vertex_normals();
-            }
-            m_result.update_normals();
 
             uint thrownOutCorrespondenceCount = 0;
             float3 invalidPt = make_float3(-std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity());
 
-			//std::vector<float>  h_robustWeights(M);
-            //m_robustWeights->copyTo(h_robustWeights);
-            //int constraintsUpdated = 0;
+			std::vector<float>  h_robustWeights(M);
+            m_robustWeights->copyTo(h_robustWeights);
+            int constraintsUpdated = 0;
 
 			cv::Mat depth_mat = cv::imread(m_targets[m_targetIndex], CV_LOAD_IMAGE_UNCHANGED); 
 
 			int testCount = 0;
 
             for (int i = 0; i < (int)M; i++) {
-                std::vector<size_t> neighbors(MAX_K);
-                std::vector<float> out_dist_sqr(MAX_K);
-                auto currentPt = m_result.point(VertexHandle(i));
-                auto sNormal = m_result.normal(VertexHandle(i));
-                auto sourceNormal = make_float3(sNormal[0], sNormal[1], sNormal[2]);
-                
-				auto sourcePt = make_float3(currentPt[0], currentPt[1], currentPt[2]);
-				vecTrans(sourcePt, mat_K);
+				float3 currentPt = (*m_vertices)[i];
+				float3 sourcePt = (*m_vertices)[i];
+				float3 sourceNormal = (*m_normals)[i];
 
+				vecTrans(sourcePt, mat_K);
+				/*if (testCount < 10) {
+					std::cout << "pt.x " << sourcePt.x << " pt.y " << sourcePt.y << " pt.z " << sourcePt.z << std::endl;
+					std::cout << "nr.x " << sourceNormal.x << " nr.y " << sourceNormal.y << " nr.z " << sourceNormal.z << std::endl;
+					testCount++;
+				}*/
 				bool validTargetFound = false;
 
 				float p_x = sourcePt.x / sourcePt.z; // edit -- sourcePt.x
 				float p_y = sourcePt.y / sourcePt.z; //
-				int p_x1 = floor(p_x); //floor(sourcePt.x / sourcePt.z); 
-				int p_x2 = p_x1 + 1;//ceil(sourcePt.x / sourcePt.z); 
-				int p_y1 = floor(p_y);//floor(sourcePt.y / sourcePt.z);
-				int p_y2 = p_y1 + 1;//ceil(sourcePt.y / sourcePt.z);
+				int p_x1 = floor(p_x); 
+				int p_x2 = p_x1 + 1; 
+				int p_y1 = floor(p_y);
+				int p_y2 = p_y1 + 1;
 
 				if (p_x1>=0 && p_x2<640-1 && p_y1>=0 && p_y2<480-1)
 				{
@@ -333,80 +348,34 @@ class CombinedSolver : public CombinedSolverBase
 
 					if (p_z11>0.0f && p_z12 >0.0f && p_z21 >0.0f && p_z22 >0.0f) //p_z11 <=1.0f && p_z12 <=1.0f && p_z21 <=1.0f && p_z22 <=1.0f
 					{
-						// use bilinear interpolation to get the depth
-						/*float p_x11 = p_x1 * p_z11; float p_y11 = p_y1 * p_z11; 
-						float p_x12 = p_x1 * p_z12; float p_y12 = p_y2 * p_z12; 
-						float p_x21 = p_x2 * p_z21; float p_y21 = p_y1 * p_z21; 
-						float p_x22 = p_x2 * p_z22; float p_y22 = p_y2 * p_z22;				 
-
-						float p_z1 = (p_x2-p_x)/(p_x2-p_x1)*p_z11 + (p_x-p_x1)/(p_x2-p_x1)*p_z21;
-						float p_z2 = (p_x2-p_x)/(p_x2-p_x1)*p_z12 + (p_x-p_x1)/(p_x2-p_x1)*p_z22;
-						float p_z = (p_y2-p_y)/(p_y2-p_y1)*p_z1 + (p_y-p_y1)/(p_y2-p_y1)*p_z2;*/
-					
-						// project back to world coordinate
-						//float3 target = make_float3(p_x, p_y, p_z); 
-
-						//p_x = (int)round(p_x); p_y = (int)round(p_y);
-						//float p_z = (float)(depth_mat.at<unsigned short>(p_y, p_x));
-						//float3 target = make_float3(p_x * p_z, p_y * p_z, p_z);
+						// get target point position
 						float3 target = make_float3(p_x1*p_z11, p_y1*p_z11, p_z11);
 						vecTrans(target, mat_K_inv);
 
-						// construct normal
-						const Vec3f targetPt = Vec3f(target.x, target.y, target.z);
-
-						// update depth value if the point falls on axis
-						/*if (p_x1 == p_x2) {p_x2 = p_x1 + 1;}
-						if (p_y1 == p_y2) {p_y2 = p_y1 + 1;}
-						p_z12 = (float)(depth_mat.at<unsigned short>(p_y2, p_x1)) / 1000.0f;
-						p_z21 = (float)(depth_mat.at<unsigned short>(p_y1, p_x2)) / 1000.0f;
-						p_z22 = (float)(depth_mat.at<unsigned short>(p_y2, p_x2)) / 1000.0f;		
-						// determine which triangle the point belongs to and get the u,v vectors for calculating normal
-						float3 uVec; float3 vVec;
-						if (p_y <= (-1*p_x+1)) {
-							uVec.x = p_x2*p_z21-p_x1*p_z11; uVec.y = p_y1*p_z21-p_y1*p_z11; uVec.z = p_z21-p_z11;
-							vVec.x = p_x1*p_z12-p_x1*p_z11; vVec.y = p_y2*p_z12-p_y1*p_z11; vVec.z = p_z12-p_z11;							
-						}
-						else {
-							uVec.x = p_x2*p_z21-p_x2*p_z22; uVec.y = p_y1*p_z21-p_y2*p_z21; uVec.z = p_z21-p_z22;
-							vVec.x = p_x1*p_z12-p_x2*p_z22; vVec.y = p_y2*p_z12-p_y2*p_z22; vVec.z = p_z12-p_z12;							
-						}*/
-
-						/*p_x1 = (int)floor(p_x1);  p_x2 = p_x1 + 1;
-						p_y1 = (int)floor(p_y1);  p_y2 = p_y1 + 1;
-						p_z11 = (float)(depth_mat.at<unsigned short>(p_y1, p_x1)) / 1000.0f;
-						p_z12 = (float)(depth_mat.at<unsigned short>(p_y2, p_x1)) / 1000.0f;
-						p_z21 = (float)(depth_mat.at<unsigned short>(p_y1, p_x2)) / 1000.0f;*/
+						// get tangent and bitanget as uVec and vVec
 						float3 uVec; float3 vVec;	
 						uVec.x = p_x2*p_z21-p_x1*p_z11; uVec.y = p_y1*p_z21-p_y1*p_z11; uVec.z = p_z21-p_z11;
 						vVec.x = p_x1*p_z12-p_x1*p_z11; vVec.y = p_y2*p_z12-p_y1*p_z11; vVec.z = p_z12-p_z11;
 				
 						vecTrans(uVec, mat_K_inv); vecTrans(vVec, mat_K_inv);
+						
 						// calculate unit normal
-						//float3 normVec = make_float3(uVec[1]*vVec[2]-uVec[2]*vVec[1], uVec[2]*vVec[0]-uVec[0]*vVec[2], uVec[0]*vVec[1]-uVec[1]*vVec[0]);
 						float3 normVec = make_float3(uVec.y*vVec.z-uVec.z*vVec.y, uVec.z*vVec.x-uVec.x*vVec.z, uVec.x*vVec.y-uVec.y*vVec.x);
-						//vecTrans(normVec, mat_K_inv);
-						float mag = sqrt(normVec.x*normVec.x + normVec.y*normVec.y + normVec.z*normVec.z);
-						normVec.x /= mag; normVec.y /= mag; normVec.z /= mag;
+						normVec = normalize(normVec);
 
-						float dist = (targetPt - currentPt).length();
+						// get the distance between the source point and the target point
+						float3 distVec = target - currentPt;
+						float dist = length(distVec);
 
-						// New
-						if (dot(normVec, sourceNormal) < 0) {
+						// get the correct normal direction
+						/*if (dot(normVec, sourceNormal) < 0) {
+							normVec.x = -normVec.x; normVec.y = -normVec.y; normVec.z = -normVec.z; 
+						}*/
+						if (normVec.z > 0) {
 							normVec.x = -normVec.x; normVec.y = -normVec.y; normVec.z = -normVec.z; 
 						}
-
+						// update if it is under threshold
 		                if (dist < positionThreshold) {
-							/*if (testCount < 10) {
-								std::cout << "i: " << i << std::endl;
-								std::cout << "dist: "<<dist<<" p_x1: "<<p_x1<<" p_y1: "<<p_y1<<" p_z11: "<<p_z11<<std::endl;
-								std::cout << "currentPt=>x: "<<currentPt[0]<<" y: "<<currentPt[1]<<" z: "<<currentPt[2]<<std::endl;
-								std::cout << "targetPt=>x: "<<targetPt[0]<<" y: "<<targetPt[1]<<" z: "<<targetPt[2]<<std::endl;
-								std::cout << "normVec=>x: "<<normVec.x<<" y: "<<normVec.y<<" z: "<<normVec.z<<std::endl;
-								std::cout << "sourceNormal=>x: "<<sourceNormal.x<<" y: "<<sourceNormal.y<<" z: "<<sourceNormal.z<<std::endl;
-								std::cout << "dot(normVec, sourceNormal): "<<dot(normVec, sourceNormal)<<std::endl;
-								testCount++;
-							}*/
 				            if (dot(normVec, sourceNormal) > cosNormalThreshold) {
 								h_vertexPosTargetFloat3[i] = target;
 								h_vertexNormalTargetFloat3[i] = normVec;
@@ -417,67 +386,44 @@ class CombinedSolver : public CombinedSolverBase
 					}
 				}
 
+				// set the target to negative infinity if unbounded
                 if (!validTargetFound) {
                     ++thrownOutCorrespondenceCount;
                     h_vertexPosTargetFloat3[i] = invalidPt;
-					//h_vertexNormalTargetFloat3[i] = make_float3(0.0f, 0.0f, 0.0f);
-					//h_robustWeights[i] = 0.0f;
                 }
 
-                /*if (m_previousConstraints[i] != h_vertexPosTargetFloat3[i]) {
+				// update the weights
+                if (m_previousConstraints[i] != h_vertexPosTargetFloat3[i]) {
                     m_previousConstraints[i] = h_vertexPosTargetFloat3[i];
                     ++constraintsUpdated;
                     
-                    auto currentPt = m_result.point(VertexHandle(i));
-                    auto v = h_vertexPosTargetFloat3[i];
-                    const Vec3f target = Vec3f(v.x, v.y, v.z);
-                    float dist = (target - currentPt).length();
+                    float3 currentPt = (*m_vertices)[i];
+                    float3 v = h_vertexPosTargetFloat3[i];
+                    float3 distVec = currentPt - v;
+                    float dist = length(distVec);
 
+					// weight_d, weight_n, weight_v correspond to position, normal, camera view deviation
 					float weight_d = 1.0f - dist / positionThreshold;
 					float weight_n = 1.0f - (1.0f - dot(h_vertexNormalTargetFloat3[i], sourceNormal)) / cosNormalThreshold;
 
-					float3 camera_view = make_float3(-0.4594f, -0.3445f, 0.8187f);
-					float weight_v = 1.0f - (1.0f - dot(h_vertexNormalTargetFloat3[i], camera_view)) / viewThreshold;
+					// use camera view direction will make the edges unstable
+					//float3 camera_view = make_float3(-0.4594f, -0.3445f, 0.8187f);
+					//float weight_v = 1.0f - (1.0f - dot(h_vertexNormalTargetFloat3[i], camera_view)) / viewThreshold;
 
-					if (weight_d >= 0) { //&& weight_n >= 0 && weight_v >= 0
+					if (weight_d >= 0 && weight_n >= 0) { //&& weight_n >= 0 && weight_v >= 0
 						//float weight = (weight_d + weight_n + weight_v) / 3;
-						float weight = weight_d;
+						float weight = (weight_d + weight_n) / 2;
+						//float weight = weight_d;
 						h_robustWeights[i] = fmaxf(0.1f, weight*0.9f+0.05f); //weight*0.9f+0.05f
 					} else {
-						h_robustWeights[i] = 0.1f;
+						h_robustWeights[i] = 0.0f;
 					}
-
-                    float weight = (positionThreshold - dist) / positionThreshold;
-                    h_robustWeights[i] = fmaxf(0.1f, weight*0.9f+0.05f); //weight*weight
-                }*/
+                }
 			}
 
 
             m_vertexPosTargetFloat3->update(h_vertexPosTargetFloat3);
             m_vertexNormalTargetFloat3->update(h_vertexNormalTargetFloat3);
-
-            std::vector<float>  h_robustWeights(M);
-            m_robustWeights->copyTo(h_robustWeights);
-            int constraintsUpdated = 0;
-            for (int i = 0; i < (int)M; ++i) {
-                if (m_previousConstraints[i] != h_vertexPosTargetFloat3[i]) {
-                    m_previousConstraints[i] = h_vertexPosTargetFloat3[i];
-                    ++constraintsUpdated;
-                    {
-                        auto currentPt = m_result.point(VertexHandle(i));
-                        auto v = h_vertexPosTargetFloat3[i];
-                        const Vec3f target = Vec3f(v.x, v.y, v.z);
-                        float dist = (target - currentPt).length();
-                        float weight = (positionThreshold - dist) / positionThreshold;
-						
-                        //h_robustWeights[i] = fmaxf(0.1f, weight*0.9f+0.05f); //weight*weight
-						h_robustWeights[i] = fmaxf(0.01f, weight*0.99f+0.005f);
-                        //h_robustWeights[i] = 1.0f;
-                    }
-                }
-            }
-
-
             m_robustWeights->update(h_robustWeights);
 
             std::cout << "*******Thrown out correspondence count: " << thrownOutCorrespondenceCount << std::endl;
@@ -506,6 +452,11 @@ class CombinedSolver : public CombinedSolverBase
 				m_min.x = fmin(m_min.x, pt.x); m_min.y = fmin(m_min.y, pt.y); m_min.z = fmin(m_min.z, pt.z);
 				m_max.x = fmax(m_max.x, pt.x); m_max.y = fmax(m_max.y, pt.y); m_max.z = fmax(m_max.z, pt.z);
 			}
+			m_delta = (m_max - m_min); m_delta.x /= (m_dims.x); m_delta.y /= (m_dims.y); m_delta.z /= (m_dims.z);
+			
+			std::cout<<"m_min.x: "<<m_min.x<<" m_min.y: "<<m_min.y<<" m_min.z: "<<m_min.z <<std::endl;
+			std::cout<<"m_max.x: "<<m_max.x<<" m_max.y: "<<m_max.y<<" m_max.z: "<<m_max.z <<std::endl;
+			std::cout<<"m_delta.x: "<<m_delta.x<<" m_delta.y: "<<m_delta.y<<" m_delta.z: "<<m_delta.z <<std::endl;
 		}
 
 		void initializeWarpGrid()
@@ -527,7 +478,6 @@ class CombinedSolver : public CombinedSolverBase
 						int3 gridIdx = make_int3(i, j, k);
 						//h_gridVertexPosFloat3[getIndex1D(gridIdx)] = v;//
 						
-
 						if (k!=m_dims.z) { 
 							regGrid_v0.push_back(getIndex1D(gridIdx)); 
 							regGrid_v1.push_back(getIndex1D(gridIdx+make_int3( 0, 0, 1)));
@@ -570,46 +520,25 @@ class CombinedSolver : public CombinedSolverBase
 
 		void resetGPUMemory()
 		{
-			//computeBoundingBox();
-			//m_delta = (m_max - m_min); m_delta.x /= (m_dims.x); m_delta.y /= (m_dims.y); m_delta.z /= (m_dims.z);
-			initializeWarpGrid();
-
-			/*m_min = make_float3(+std::numeric_limits<float>::max(), +std::numeric_limits<float>::max(), +std::numeric_limits<float>::max());
-			m_max = make_float3(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
-			for (SimpleMesh::VertexIter v_it = m_initial.vertices_begin(); v_it != m_initial.vertices_end(); ++v_it)
-			{
-				SimpleMesh::Point p = m_initial.point(VertexHandle(*v_it));
-				m_min.x = fmin(m_min.x, p[0]); m_min.y = fmin(m_min.y, p[1]); m_min.z = fmin(m_min.z, p[2]);
-				m_max.x = fmax(m_max.x, p[0]); m_max.y = fmax(m_max.y, p[1]); m_max.z = fmax(m_max.z, p[2]);
-			}
-
-			m_delta = (m_max - m_min); m_delta.x /= (m_dims.x); m_delta.y /= (m_dims.y); m_delta.z /= (m_dims.z);
-			std::cout<<"m_min.x: "<<m_min.x<<" m_min.y: "<<m_min.y<<" m_min.z: "<<m_min.z <<std::endl;
-			std::cout<<"m_max.x: "<<m_max.x<<" m_max.y: "<<m_max.y<<" m_max.z: "<<m_max.z <<std::endl;
-			std::cout<<"m_delta.x: "<<m_delta.x<<" m_delta.y: "<<m_delta.y<<" m_delta.z: "<<m_delta.z <<std::endl;*/
-            
-            computeBoundingBox();
-
-			//saveGraphResults();
-			//float EPS = 0.000001f;
-			//m_min -= make_float3(EPS, EPS, EPS);
-			//m_max += make_float3(EPS, EPS, EPS);
-			//m_min = make_float3(-1.5f,-1.5f,0.5f);
-			m_delta = (m_max - m_min); m_delta.x /= (m_dims.x); m_delta.y /= (m_dims.y); m_delta.z /= (m_dims.z);
-			std::cout<<"m_min.x: "<<m_min.x<<" m_min.y: "<<m_min.y<<" m_min.z: "<<m_min.z <<std::endl;
-			std::cout<<"m_max.x: "<<m_max.x<<" m_max.y: "<<m_max.y<<" m_max.z: "<<m_max.z <<std::endl;
-			std::cout<<"m_delta.x: "<<m_delta.x<<" m_delta.y: "<<m_delta.y<<" m_delta.z: "<<m_delta.z <<std::endl;
-            
+			m_gridPosFloat3Urshape->update(h_gridVertexPosFloat3);
+			cudaSafeCall(cudaMemset(m_anglesFloat3->data(), 0, sizeof(float3)*m_nNodes));
+			computeBoundingBox();
 
 	        std::vector<int> w;
 			std::vector<int> v1; std::vector<int> v2; std::vector<int> v3; std::vector<int> v4;
 			std::vector<int> v5; std::vector<int> v6; std::vector<int> v7; std::vector<int> v8; 
 
-			for (SimpleMesh::VertexIter v_it = m_initial.vertices_begin(); v_it != m_initial.vertices_end(); ++v_it)
+			vector<float3>& vertices = *m_vertices;
+
+			m_M = vertices.size();
+			m_vertexToVoxels.resize(m_M);
+            m_relativeCoords.resize(m_M);
+            
+			for (int i=0; i<m_M; i++)
 			{
-			    VertexHandle c_vh(*v_it);
-				SimpleMesh::Point p = m_initial.point(c_vh);
-				float3 pp = make_float3(p[0], p[1], p[2]);
+			    //VertexHandle c_vh(*v_it);
+				//SimpleMesh::Point p = m_initial.point(c_vh);
+				float3 pp = vertices[i];//make_float3(p[0], p[1], p[2]);
 
 				pp = (pp - m_min);
 				pp.x /= m_delta.x;
@@ -617,10 +546,10 @@ class CombinedSolver : public CombinedSolverBase
 				pp.z /= m_delta.z;
 
 				int3 pInt = make_int3((int)pp.x, (int)pp.y, (int)pp.z);
-				m_vertexToVoxels[c_vh.idx()] = pInt;
-				m_relativeCoords[c_vh.idx()] = pp - make_float3((float)pInt.x, (float)pInt.y, (float)pInt.z);
+				m_vertexToVoxels[i] = pInt;
+				m_relativeCoords[i] = pp - make_float3((float)pInt.x, (float)pInt.y, (float)pInt.z);
 
-				w.push_back(c_vh.idx()); 
+				w.push_back(i); 
 
 				v1.push_back( getIndex1D(pInt + make_int3(0, 0, 0)) );
 				v2.push_back( getIndex1D(pInt + make_int3(0, 0, 1)) );
@@ -641,10 +570,10 @@ class CombinedSolver : public CombinedSolverBase
 			//OpenMesh::IO::write_mesh(m_result, "../output_mesh/test_subgrid.ply");
 		}
 
-        SimpleMesh* result()
+        /*SimpleMesh* result()
         {
             return &m_result;
-        }
+        }*/
 
 		// New!
 		std::vector<float3>* get_grid()
@@ -667,19 +596,30 @@ class CombinedSolver : public CombinedSolverBase
 			m_targets = targets;
 		}
 
-		void set_mesh(SimpleMesh* targetMesh)
+		/*void set_mesh(SimpleMesh* targetMesh)
 		{
 			m_result = *targetMesh;
+		}*/
+		
+		void set_vnt(std::vector<float3>* vertices, std::vector<float3>* normals, std::vector<int3>* triangles) {
+			m_vertices = vertices;
+			m_normals = normals;
+			m_triangles = triangles;
 		}
 
 		void copyResultToCPUFromFloat3()
 		{
+			std::vector<float3>& vertices = *m_vertices;
+			std::vector<float3>& normals = *m_normals;
+			std::vector<int3>& triangles = *m_triangles;
+			
             std::vector<float3> h_gridPosFloat3(m_nNodes);
             m_gridPosFloat3->copyTo(h_gridPosFloat3);
-
-			for (SimpleMesh::VertexIter v_it = m_result.vertices_begin(); v_it != m_result.vertices_end(); ++v_it)
+			
+			int M = vertices.size();
+			for (int i=0; i<M; i++)
 			{
-				VertexHandle vh(*v_it);
+				VertexHandle vh(i);//vh(*v_it);
 
 				int3   voxelId = m_vertexToVoxels[vh.idx()];
 				float3 relativeCoords = m_relativeCoords[vh.idx()];
@@ -703,7 +643,28 @@ class CombinedSolver : public CombinedSolverBase
 
 				float3 p = (1.0f - relativeCoords.z)*pxx0 + relativeCoords.z*pxx1;
 
-				m_result.set_point(vh, SimpleMesh::Point(p.x, p.y, p.z));
+				//m_result.set_point(vh, SimpleMesh::Point(p.x, p.y, p.z));
+
+				// new
+				vertices[vh.idx()] = p;				
+			}
+
+			// update normals			
+			std::fill(normals.begin(), normals.end(), make_float3(0.0f, 0.0f, 0.0f));
+			for (int i=0; i<triangles.size(); i++) {
+				float3 uVec = vertices[triangles[i].y] - vertices[triangles[i].x];
+				float3 vVec = vertices[triangles[i].z] - vertices[triangles[i].x];
+				float3 v_norm = make_float3(uVec.y*vVec.z-uVec.z*vVec.y, uVec.z*vVec.x-uVec.x*vVec.z, uVec.x*vVec.y-uVec.y*vVec.x);
+				if (v_norm.z > 0) {
+					v_norm.x = -v_norm.x; v_norm.y = -v_norm.y; v_norm.z = -v_norm.z;
+				}
+				normals[triangles[i].x] += v_norm;
+				normals[triangles[i].y] += v_norm;
+				normals[triangles[i].z] += v_norm;								
+			}
+
+			for (int i=0; i<normals.size(); i++) {
+				normals[i] = normalize(normals[i]);
 			}
 		}
 
@@ -824,6 +785,9 @@ class CombinedSolver : public CombinedSolverBase
 		unsigned int m_nNodes; //number of grid points
         unsigned int m_M; //number of mesh points
 		TSDFVolume* m_volume;
+		vector<float3>* m_vertices;
+		vector<float3>* m_normals;
+		vector<int3>* m_triangles;
 
 		float3 m_min;
 		float3 m_max;
@@ -837,8 +801,8 @@ class CombinedSolver : public CombinedSolverBase
 
         ml::Timer m_timer;
 
-		SimpleMesh m_result;
-		SimpleMesh m_initial;
+		//SimpleMesh m_result;
+		//SimpleMesh m_initial;
 
 		std::vector<std::string> m_targets;
         std::vector<float3> m_previousConstraints;

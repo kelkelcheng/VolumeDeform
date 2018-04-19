@@ -57,6 +57,9 @@ private:
 	// translation vector for each node
 	//float3 *m_deform;
 	float3 *grid_coord;
+	
+	// state for each grid point
+	unsigned int* m_state;
 
 	int max_threads;
 };
