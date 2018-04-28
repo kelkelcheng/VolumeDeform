@@ -3,6 +3,7 @@
 #include <string>
 #include "cudaUtil.h"
 #include <math.h>
+#include <stdio.h>
 //using namespace std;
 
 __device__
@@ -33,7 +34,7 @@ int3 index_1to3(int idx, dim3 grid_size) {
 }
 
 __device__
-int index_3to1(int3 idx, dim3 grid_size)
+int sg_index_3to1(int3 idx, dim3 grid_size)
 {
 	return idx.z * (grid_size.y * grid_size.x) + idx.y * grid_size.x + idx.x;
 }
@@ -49,49 +50,15 @@ int3 index_1to3(int idx, dim3 grid_size) {
 	return r_idx;
 }*/
 
-/*__global__
-void initialize_grid(float3 * grid, dim3 grid_size, float voxel_size, float3 grid_origin ){
-	int vy = threadIdx.x;
-	int vz = blockIdx.x;
-
-	// If this thread is in range
-    if ( vy < grid_size.y+1 && vz < grid_size.z+1 ) {
-
-        // The next (x_size) elements from here are the x coords
-        size_t base_grid_index = (grid_size.x+1) * (grid_size.y+1) * vz + (grid_size.x+1) * vy;
-
-        size_t grid_index = base_grid_index;
-        for ( int vx = 0; vx < grid_size.x+1; vx++ ) {
-            grid[grid_index].x = (float)vx * voxel_size + grid_origin.x;
-            grid[grid_index].y = (float)vy * voxel_size + grid_origin.y;
-            grid[grid_index].z = (float)vz * voxel_size + grid_origin.z;
-
-            grid_index++;
-        }
-    }
-}*/
-
-/*__global__
-void initialize_grid(float3 * grid, dim3 grid_size, float voxel_size, float3 grid_origin ){
-	int vy = threadIdx.x;
-	int vz = blockIdx.x;
-
-	// If this thread is in range
-    if ( vy < grid_size.y && vz < grid_size.z ) {
-
-        // The next (x_size) elements from here are the x coords
-        size_t base_grid_index = (grid_size.x) * (grid_size.y) * vz + (grid_size.x) * vy;
-
-        size_t grid_index = base_grid_index;
-        for ( int vx = 0; vx < grid_size.x; vx++ ) {
-            grid[grid_index].x = (float)vx * voxel_size + grid_origin.x;
-            grid[grid_index].y = (float)vy * voxel_size + grid_origin.y;
-            grid[grid_index].z = (float)vz * voxel_size + grid_origin.z;
-
-            grid_index++;
-        }
-    }
-}*/
+__device__
+bool if_valid(int3 idx, dim3 size, unsigned int* state) {
+	if ((idx.x >= 0) && (idx.x < size.x) && 
+		(idx.y >= 0) && (idx.y < size.y) && 
+		(idx.z >= 0) && (idx.z < size.z)) {
+		return (state[sg_index_3to1(idx, size)] == 2);
+	}
+	return 0;
+}
 
 __global__
 void initialize_grid(float3 * grid, dim3 grid_size, float3 voxel_size, float3 grid_origin ){
@@ -145,7 +112,7 @@ void deformation( float3* grid, float3 * deformation, dim3 grid_size ) {
 __host__
 TSDFVolume::TSDFVolume(int x, int y, int z, float3 ori, float3 size){
 		max_threads = 512;
-		x+=1; y+=1; z+=1;
+		//x+=1; y+=1; z+=1;
 
 		m_size.x = x;
 		m_size.y = y;
@@ -217,15 +184,15 @@ void TSDFVolume::deallocate( ) {
 __global__
 void Update_state(unsigned int * state, dim3 size){
 	int volume_idx = blockIdx.x * blockDim.x + threadIdx.x;
-	if (volume_idx < size.x * size.y * size.z){
-		if (state[volume_idx]==1) {state[volume_idx]=2;}
+	if (volume_idx < size.x * size.y * size.z && volume_idx >= 0){
+		if (state[volume_idx]==9) {state[volume_idx]=2;}
 	}
 }
 
 __global__
 void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
                dim3 size, float3 origin, float3 voxel_size, float trunc_margin,
-               float * voxel_grid_TSDF, float * voxel_grid_weight, float3* grid_c, unsigned int* state) {
+               float * voxel_grid_TSDF, float * voxel_grid_weight, float3* grid_c, unsigned int* state, bool check_start) {
 
 	int volume_idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (volume_idx < size.x * size.y * size.z){
@@ -243,7 +210,7 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 		float pt_cam_y = cam2base[0 * 4 + 1] * tmp_pt[0] + cam2base[1 * 4 + 1] * tmp_pt[1] + cam2base[2 * 4 + 1] * tmp_pt[2];
 		float pt_cam_z = cam2base[0 * 4 + 2] * tmp_pt[0] + cam2base[1 * 4 + 2] * tmp_pt[1] + cam2base[2 * 4 + 2] * tmp_pt[2];
 
-		if (pt_cam_z <= 0) //0
+		if (pt_cam_z <= 0.2f) //0
 			return;
 
 		int pt_pix_x = roundf(cam_K[0 * 3 + 0] * (pt_cam_x / pt_cam_z) + cam_K[0 * 3 + 2]);
@@ -258,81 +225,86 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 
 		float diff = depth_val - pt_cam_z;
 
-		if (diff <= -trunc_margin) {
+		/*if (diff <= -trunc_margin) {
 			voxel_grid_TSDF[volume_idx] = -1.0f; //voxel_grid_TSDF[volume_idx] = 99.0f; //
 			voxel_grid_weight[volume_idx] += 1.0f;
 			return;
-		}
-			
+		}*/
+		diff = fmax(diff, -trunc_margin); // new
+		
+		
 		// update one-ring only
 		if ( voxel_grid_TSDF[volume_idx] >= 90.0f )	{ //90.0f
 			int3 v_idx3 = index_1to3(volume_idx, size);
 			bool check_iso = 0;
-			int num_grid = size.x * size.y * size.z;
+			//int num_grid = size.x * size.y * size.z;
 			
 			int3 v_idx3_temp = v_idx3; 
 			v_idx3_temp.x = v_idx3.x + 1; 
-			int v_idx1 = index_3to1(v_idx3_temp, size);
-			if ((v_idx1 < num_grid) && (v_idx1 >= 0)) {
-				if (state[v_idx1]==2) {check_iso = 1;}
-			}
+			int v_idx1 = sg_index_3to1(v_idx3_temp, size);
+			check_iso = check_iso || if_valid(v_idx3_temp, size, state);
 
 			v_idx3_temp = v_idx3; 
 			v_idx3_temp.x = v_idx3.x - 1; 
-			v_idx1 = index_3to1(v_idx3_temp, size);
-			if (v_idx1 < num_grid && v_idx1 >= 0) {
-				if (state[v_idx1]==2) {check_iso = 1;}
-			}
-
-			v_idx3_temp = v_idx3; 
-			v_idx3_temp.x = v_idx3.y + 1; 
-			v_idx1 = index_3to1(v_idx3_temp, size);
-			if (v_idx1 < num_grid && v_idx1 >= 0) {
-				if (state[v_idx1]==2) {check_iso = 1;}
-			}
-
-			v_idx3_temp = v_idx3; 
-			v_idx3_temp.x = v_idx3.y - 1; 
-			v_idx1 = index_3to1(v_idx3_temp, size);
-			if (v_idx1 < num_grid && v_idx1 >= 0) {
-				if (state[v_idx1]==2) {check_iso = 1;}
-			}
-
-			v_idx3_temp = v_idx3; 
-			v_idx3_temp.x = v_idx3.z + 1; 
-			v_idx1 = index_3to1(v_idx3_temp, size);
-			if (v_idx1 < num_grid && v_idx1 >= 0) {
-				if (state[v_idx1]==2) {check_iso = 1;}
-			}
-
-			v_idx3_temp = v_idx3; 
-			v_idx3_temp.x = v_idx3.z - 1; 
-			v_idx1 = index_3to1(v_idx3_temp, size);
-			if (v_idx1 < num_grid && v_idx1 >= 0) {
-				if (state[v_idx1]==2) {check_iso = 1;}
-			}
+			v_idx1 = sg_index_3to1(v_idx3_temp, size);
+			check_iso = check_iso || if_valid(v_idx3_temp, size, state);
 			
-			if (check_iso == 1) {												
-				voxel_grid_TSDF[volume_idx] = fmin(1.0f, diff / trunc_margin); //fmin(diff, trunc_margin);
-				voxel_grid_weight[volume_idx] = 1.0f;
-				state[volume_idx] = 1;
+			v_idx3_temp = v_idx3; 
+			v_idx3_temp.y = v_idx3.y + 1; 
+			v_idx1 = sg_index_3to1(v_idx3_temp, size);
+			check_iso = check_iso || if_valid(v_idx3_temp, size, state);
+
+			v_idx3_temp = v_idx3; 
+			v_idx3_temp.y = v_idx3.y - 1; 
+			v_idx1 = sg_index_3to1(v_idx3_temp, size);
+			check_iso = check_iso || if_valid(v_idx3_temp, size, state);
+
+			v_idx3_temp = v_idx3; 
+			v_idx3_temp.z = v_idx3.z + 1; 
+			v_idx1 = sg_index_3to1(v_idx3_temp, size);
+			check_iso = check_iso || if_valid(v_idx3_temp, size, state);
+
+			v_idx3_temp = v_idx3; 
+			v_idx3_temp.z = v_idx3.z - 1; 
+			check_iso = check_iso || if_valid(v_idx3_temp, size, state);
+			
+			if (check_iso && (!check_start)) {
+				float dist = fmin(1.0f, diff / trunc_margin); //fmin(diff, trunc_margin);	
+				if (state[volume_idx] == 0) {												 				
+					state[volume_idx] = 3;//1;
+				} else {				
+					dist = (voxel_grid_TSDF[volume_idx] * voxel_grid_weight[volume_idx] + dist) / (voxel_grid_weight[volume_idx] + 1.0f);
+					state[volume_idx] += 1;
+				}
+				voxel_grid_weight[volume_idx] += 1.0f;
+				voxel_grid_TSDF[volume_idx] = dist;
 				return;
-			}
+			} 
+			
+			if (!check_start) {
+				return;
+			}		
 		}
 
 		// Integrate
-
+		// update only voxel used in optimization
+		/*if (state[volume_idx]!=2 && !check_start) {
+			return;
+		}*/
+		
 		float dist = fmin(1.0f, diff / trunc_margin); //fmin(diff, trunc_margin);
 		float weight_old = voxel_grid_weight[volume_idx];
 		float weight_new = weight_old + 1.0f;
-		voxel_grid_weight[volume_idx] = weight_new;
+		if (weight_new < 90.0f) {
+			voxel_grid_weight[volume_idx] = weight_new;
+		}
 		voxel_grid_TSDF[volume_idx] = (voxel_grid_TSDF[volume_idx] * weight_old + dist) / weight_new;
-		state[volume_idx] = 2;
+		state[volume_idx] = 2; //0
 	}
 }
 
 __host__
-void TSDFVolume::Integrate(float* depth_map,float* cam_K, float* cam2base){
+void TSDFVolume::Integrate(float* depth_map,float* cam_K, float* cam2base, bool check_start){
 	float * gpu_cam_K;
 	float * gpu_cam2base;
 	float * gpu_depth_im;
@@ -347,7 +319,7 @@ void TSDFVolume::Integrate(float* depth_map,float* cam_K, float* cam2base){
 	cudaMemcpy(gpu_cam2base, cam2base, 4 * 4 * sizeof(float), cudaMemcpyHostToDevice);
 
 	int blocknum = ceil(m_size.x * m_size.y * m_size.z / (float)max_threads);
-	Integrate_kernal<<< blocknum,max_threads >>>(gpu_cam_K, gpu_cam2base, gpu_depth_im, m_size, origin, voxel_size, trunc_margin,m_distances, m_weights, grid_coord, m_state); //m_deform
+	Integrate_kernal<<< blocknum,max_threads >>>(gpu_cam_K, gpu_cam2base, gpu_depth_im, m_size, origin, voxel_size, trunc_margin,m_distances, m_weights, grid_coord, m_state, check_start); //m_deform
 	cudaDeviceSynchronize( );
 
 	Update_state<<< blocknum,max_threads >>>(m_state, m_size);

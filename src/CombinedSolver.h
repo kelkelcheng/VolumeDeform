@@ -15,6 +15,8 @@
 #include "TSDFVolume.h"
 #include "utils.hpp"
 #include "MarchingCubes.h"
+
+#include <assert.h> 
 //#include "cudaUtil.h"
 // just for testing purpose
 //extern "C" void initAngle(void* ptr_angles, unsigned int m_nNodes);
@@ -42,7 +44,7 @@ class CombinedSolver : public CombinedSolverBase
 {
 
 	public:
-        CombinedSolver(const SimpleMesh* sourceMesh, const std::vector<std::string> targetFiles, CombinedSolverParameters params, TSDFVolume* volume, vector<float3>* vertices, vector<float3>* normals, vector<int3>* triangles)
+        CombinedSolver(const std::vector<std::string> targetFiles, CombinedSolverParameters params, TSDFVolume* volume, std::vector<float3>* vertices, std::vector<float3>* normals, std::vector<int3>* triangles, std::vector<int3>* vol_idx, std::vector<float3>* rel_coors)
 		{
             m_combinedSolverParameters = params;
             //m_result = *sourceMesh;
@@ -53,8 +55,24 @@ class CombinedSolver : public CombinedSolverBase
 			m_vertices = vertices;
 			m_normals = normals;
 			m_triangles = triangles;
+			m_vol_idx = vol_idx;
+			m_rel_coors = rel_coors;
 
-            m_gridDims = make_int3(25, 26, 4);
+			dim3 vol_size = m_volume->get_size();
+			
+			m_scale = make_int3(15, 15, 20);
+			
+			std::cout << "vol_size.x "<<vol_size.x<<" m_scale.x "<<m_scale.x<<std::endl;
+			assert(((vol_size.x - 1) % m_scale.x) == 0);
+			assert(((vol_size.y - 1) % m_scale.y) == 0);
+			assert(((vol_size.z - 1) % m_scale.z) == 0);
+			
+			// should equal to (25, 26, 4) in this case
+			m_gridDims.x = (vol_size.x - 1) / m_scale.x + 1;
+			m_gridDims.y = (vol_size.y - 1) / m_scale.y + 1;
+			m_gridDims.z = (vol_size.z - 1) / m_scale.z + 1;
+			
+            //m_gridDims = make_int3(25, 26, 4);
 			//m_gridDims = make_int3(25, 26, 8);
 			//m_gridDims = make_int3(5, 5, 3);
 
@@ -94,6 +112,9 @@ class CombinedSolver : public CombinedSolverBase
 
 
 			initializeWarpGrid();		
+			
+			//dim3 vol_size = m_volume->get_size();
+			grid_state.resize(vol_size.x * vol_size.y * vol_size.z);
 			//resetGPUMemory();   
 
             /*if (!m_result.has_vertex_colors()) {
@@ -112,10 +133,10 @@ class CombinedSolver : public CombinedSolverBase
 
         virtual void combinedSolveInit() override {
             m_weightFit = 10.0f; 
-            m_weightRegMax = 64.0f;
+            m_weightRegMax = 16.0f; // 64
             
-            m_weightRegMin = 32.0f;
-            m_weightRegFactor = 0.9f;
+            m_weightRegMin = 10.0f; //32
+            m_weightRegFactor = 0.9f; //0.95f
 
             m_weightReg = m_weightRegMax;
 
@@ -143,9 +164,10 @@ class CombinedSolver : public CombinedSolverBase
         }
 
         virtual void solveAll() override {
+            resetGPUMemory();
             combinedSolveInit();
 
-            resetGPUMemory();
+            //resetGPUMemory();
 			m_problemParams.set("G", m_graph); // check why it is required to set it again
 			m_problemParams.set("RegGrid", m_regGrid);
 			float* depth_im = new float[480 * 640];
@@ -302,6 +324,10 @@ class CombinedSolver : public CombinedSolverBase
 		
         int setConstraints(float positionThreshold = 0.03f, float cosNormalThreshold = 0.2f, float viewThreshold = 0.8f) //std::numeric_limits<float>::infinity() 0.03 0.2
 		{
+			//test
+			dim3 vol_size = m_volume->get_size();
+			cudaMemcpy(grid_state.data(), m_volume->get_state(), vol_size.x * vol_size.y * vol_size.z * sizeof(unsigned int), cudaMemcpyDeviceToHost);
+		
 			//unsigned int M = (unsigned int)m_result.n_vertices();
 			unsigned int M = (unsigned int)(*m_vertices).size();
 			std::vector<float3> h_vertexPosTargetFloat3(M);
@@ -368,24 +394,34 @@ class CombinedSolver : public CombinedSolverBase
 						float dist = length(distVec);
 
 						// get the correct normal direction
-						/*if (dot(normVec, sourceNormal) < 0) {
-							normVec.x = -normVec.x; normVec.y = -normVec.y; normVec.z = -normVec.z; 
-						}*/
 						if (normVec.z > 0) {
 							normVec.x = -normVec.x; normVec.y = -normVec.y; normVec.z = -normVec.z; 
 						}
 						// update if it is under threshold
+						// get corresponding volume index (inside TSDFVolume)
+						// m_volume->get_origin() is wrong!	           
+		                int3 idx3 = (*m_vol_idx)[i];
+		                int idx1 = idx3.z * (vol_size.y * vol_size.x) + idx3.y * vol_size.x + idx3.x;
+						bool check_updated = 0;
+						
 		                if (dist < positionThreshold) {
 				            if (dot(normVec, sourceNormal) > cosNormalThreshold) {
 								h_vertexPosTargetFloat3[i] = target;
 								h_vertexNormalTargetFloat3[i] = normVec;
 				                validTargetFound = true;
+				                
+				                // set grid to be integratable
+				                //grid_state[idx1] = 2;
+				                //check_updated = 1;
 				            }
-
+				            check_updated = 1;
+				            grid_state[idx1] = 2; // maybe using distance is good enough
 						}
+						// disable the neighbors of the grid
+						if (!check_updated && grid_state[idx1]==2) {grid_state[idx1] = 0;}
 					}
 				}
-
+				
 				// set the target to negative infinity if unbounded
                 if (!validTargetFound) {
                     ++thrownOutCorrespondenceCount;
@@ -421,6 +457,8 @@ class CombinedSolver : public CombinedSolverBase
                 }
 			}
 
+			//test
+			cudaMemcpy(m_volume->get_state(), grid_state.data(), vol_size.x * vol_size.y * vol_size.z * sizeof(unsigned int), cudaMemcpyHostToDevice);
 
             m_vertexPosTargetFloat3->update(h_vertexPosTargetFloat3);
             m_vertexNormalTargetFloat3->update(h_vertexNormalTargetFloat3);
@@ -520,9 +558,10 @@ class CombinedSolver : public CombinedSolverBase
 
 		void resetGPUMemory()
 		{
-			m_gridPosFloat3Urshape->update(h_gridVertexPosFloat3);
-			cudaSafeCall(cudaMemset(m_anglesFloat3->data(), 0, sizeof(float3)*m_nNodes));
-			computeBoundingBox();
+			//update grid pos and angle for regularization
+			//m_gridPosFloat3Urshape->update(h_gridVertexPosFloat3);
+			//cudaSafeCall(cudaMemset(m_anglesFloat3->data(), 0, sizeof(float3)*m_nNodes));
+			//computeBoundingBox(); //--edited: no need to add this line?
 
 	        std::vector<int> w;
 			std::vector<int> v1; std::vector<int> v2; std::vector<int> v3; std::vector<int> v4;
@@ -540,15 +579,63 @@ class CombinedSolver : public CombinedSolverBase
 				//SimpleMesh::Point p = m_initial.point(c_vh);
 				float3 pp = vertices[i];//make_float3(p[0], p[1], p[2]);
 
-				pp = (pp - m_min);
+				/*pp = (pp - m_min);
 				pp.x /= m_delta.x;
 				pp.y /= m_delta.y;
 				pp.z /= m_delta.z;
 
 				int3 pInt = make_int3((int)pp.x, (int)pp.y, (int)pp.z);
+				
 				m_vertexToVoxels[i] = pInt;
-				m_relativeCoords[i] = pp - make_float3((float)pInt.x, (float)pInt.y, (float)pInt.z);
+				m_relativeCoords[i] = pp - make_float3((float)pInt.x, (float)pInt.y, (float)pInt.z);*/
+						
+				// new
+				int3 pInt = (*m_vol_idx)[i];
+				pInt.x = (int)pInt.x/m_scale.x; 
+				pInt.y = (int)pInt.y/m_scale.y;
+				pInt.z = (int)pInt.z/m_scale.z;
+				
+				assert(pInt.x < m_gridDims.x-1);
+				assert(pInt.y < m_gridDims.y-1);
+				assert(pInt.z < m_gridDims.z-1);
+				
+				//float3 p_sg = h_gridVertexPosFloat3[getIndex1D(pInt)];
+				m_vertexToVoxels[i] = pInt;
+				m_relativeCoords[i] = (*m_rel_coors)[i];// can replace m_relativeCoords later on //pp - p_sg;		
+				
+				// test
+				int3 voxelId = pInt;
+				float3 relativeCoords = m_relativeCoords[i];
+				float3 p000 = h_gridVertexPosFloat3[getIndex1D(voxelId + make_int3(0, 0, 0))];
+				float3 p001 = h_gridVertexPosFloat3[getIndex1D(voxelId + make_int3(0, 0, 1))];
+				float3 p010 = h_gridVertexPosFloat3[getIndex1D(voxelId + make_int3(0, 1, 0))];
+				float3 p011 = h_gridVertexPosFloat3[getIndex1D(voxelId + make_int3(0, 1, 1))];
+				float3 p100 = h_gridVertexPosFloat3[getIndex1D(voxelId + make_int3(1, 0, 0))];
+				float3 p101 = h_gridVertexPosFloat3[getIndex1D(voxelId + make_int3(1, 0, 1))];
+				float3 p110 = h_gridVertexPosFloat3[getIndex1D(voxelId + make_int3(1, 1, 0))];
+				float3 p111 = h_gridVertexPosFloat3[getIndex1D(voxelId + make_int3(1, 1, 1))];
 
+				float3 px00 = (1.0f - relativeCoords.x)*p000 + relativeCoords.x*p100;
+				float3 px01 = (1.0f - relativeCoords.x)*p001 + relativeCoords.x*p101;
+				float3 px10 = (1.0f - relativeCoords.x)*p010 + relativeCoords.x*p110;
+				float3 px11 = (1.0f - relativeCoords.x)*p011 + relativeCoords.x*p111;
+
+				float3 pxx0 = (1.0f - relativeCoords.y)*px00 + relativeCoords.y*px10;
+				float3 pxx1 = (1.0f - relativeCoords.y)*px01 + relativeCoords.y*px11;
+
+				float3 p = (1.0f - relativeCoords.z)*pxx0 + relativeCoords.z*pxx1;	
+				
+				if (length(p-pp) >= 0.001) {
+					std::cout<< "length(p-pp): " << length(p-pp) << std::endl;
+					std::cout << "pInt x: " << pInt.x << " y: " << pInt.y << " z: " << pInt.z << std::endl;
+					std::cout << "p x: " << p.x << " y: " << p.y << " z: " << p.z << std::endl;
+					std::cout << "pp x: " << pp.x << " y: " << pp.y << " z: " << pp.z << std::endl;
+					std::cout << "p000 x: " << p000.x << " y: " << p000.y << " z: " << p000.z << std::endl;
+					std::cout << "relativeCoords x: " << relativeCoords.x << " y: " << relativeCoords.y << " z: " << relativeCoords.z << std::endl;
+					//assert( length(p-pp) < 0.001 ); // test - p and pp should be close	!!! sometimes fail, need to investigate		
+				}
+				// --
+		
 				w.push_back(i); 
 
 				v1.push_back( getIndex1D(pInt + make_int3(0, 0, 0)) );
@@ -601,14 +688,18 @@ class CombinedSolver : public CombinedSolverBase
 			m_result = *targetMesh;
 		}*/
 		
-		void set_vnt(std::vector<float3>* vertices, std::vector<float3>* normals, std::vector<int3>* triangles) {
+		void set_vnt(std::vector<float3>* vertices, std::vector<float3>* normals, std::vector<int3>* triangles, std::vector<int3>* vol_idx) {
 			m_vertices = vertices;
 			m_normals = normals;
 			m_triangles = triangles;
+			m_vol_idx = vol_idx;
 		}
 
 		void copyResultToCPUFromFloat3()
 		{
+			//new!
+			//computeBoundingBox();
+			
 			std::vector<float3>& vertices = *m_vertices;
 			std::vector<float3>& normals = *m_normals;
 			std::vector<int3>& triangles = *m_triangles;
@@ -621,8 +712,8 @@ class CombinedSolver : public CombinedSolverBase
 			{
 				VertexHandle vh(i);//vh(*v_it);
 
-				int3   voxelId = m_vertexToVoxels[vh.idx()];
-				float3 relativeCoords = m_relativeCoords[vh.idx()];
+				int3   voxelId = m_vertexToVoxels[i]; //vh.idx()
+				float3 relativeCoords = m_relativeCoords[i]; //vh.idx()
 
 				float3 p000 = h_gridPosFloat3[getIndex1D(voxelId + make_int3(0, 0, 0))];
 				float3 p001 = h_gridPosFloat3[getIndex1D(voxelId + make_int3(0, 0, 1))];
@@ -646,7 +737,7 @@ class CombinedSolver : public CombinedSolverBase
 				//m_result.set_point(vh, SimpleMesh::Point(p.x, p.y, p.z));
 
 				// new
-				vertices[vh.idx()] = p;				
+				vertices[i] = p;	//vh.idx()		
 			}
 
 			// update normals			
@@ -785,10 +876,15 @@ class CombinedSolver : public CombinedSolverBase
 		unsigned int m_nNodes; //number of grid points
         unsigned int m_M; //number of mesh points
 		TSDFVolume* m_volume;
-		vector<float3>* m_vertices;
-		vector<float3>* m_normals;
-		vector<int3>* m_triangles;
-
+		std::vector<float3>* m_vertices;
+		std::vector<float3>* m_normals;
+		std::vector<int3>* m_triangles;
+		std::vector<int3>* m_vol_idx;
+		std::vector<float3>* m_rel_coors;
+		std::vector<unsigned int> grid_state;
+	
+		int3 m_scale;
+			
 		float3 m_min;
 		float3 m_max;
 
@@ -839,14 +935,6 @@ class CombinedSolver : public CombinedSolverBase
 			{0, 0, 1, 0},
 			{0, 0, 0, 1}
 		};
-
-		/*float mat_K_inv[4][4] =
-		{
-			{0.0018, 0, -0.5611, 0}, //0.00175333
-			{0, 0.0018, -0.4208, 0},
-			{0, 0, 1, 0},
-			{0, 0, 0, 1}
-		};*/
 
 		float mat_K_inv[4][4] =
 		{

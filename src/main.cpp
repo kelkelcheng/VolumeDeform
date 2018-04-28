@@ -49,8 +49,8 @@ int main(int argc, const char * argv[])
 	float3 voxel_size = make_float3(1.0f/361.0f, 1.0f/376.0f, 0.4f/61.0f);
 	//float3 voxel_size = make_float3(0.6f/361.0f, 0.7f/376.0f, 0.25f/61.0f);
   	//TSDFVolume volume(500,520,80, voxel_size);
-	TSDFVolume volume(361,376,61, make_float3(-0.5611f,-0.4208f, 0.65f), voxel_size);
 	//TSDFVolume volume(361,376,71, make_float3(-0.5611f,-0.4208f, 0.65f), voxel_size);
+	TSDFVolume volume(361,376,61, make_float3(-0.5611f,-0.4208f, 0.65f), voxel_size);
 	//TSDFVolume volume(361,376,61, make_float3(-0.36f,-0.26f, 0.79f), voxel_size);
 
 	float mat_K[3 * 3] = {570.342, 0, 320,  0, 570.342, 240,  0, 0, 1};
@@ -59,11 +59,14 @@ int main(int argc, const char * argv[])
 	int im_width = 640; int im_height = 480;
 	float* depth_im = new float[im_height * im_width];
 	ReadDepth(sourceFilename, im_height, im_width, depth_im);
-	volume.Integrate(depth_im, mat_K, world2cam);
+	volume.Integrate(depth_im, mat_K, world2cam, 1);
 	std::vector<float3> vertices;
 	std::vector<int3> triangles;
 	std::vector<float3> normals;
-	extract_surface(volume, vertices, triangles, normals);
+	std::vector<int3> vol_idx;
+	std::vector<float3> rel_coors;
+	
+	extract_surface(volume, vertices, triangles, normals, vol_idx, rel_coors);
 	write_to_ply("../output_mesh/after_integration0.ply",vertices,triangles);
 	//write_to_ply("../output_mesh/depth30.ply",vertices,triangles);
 
@@ -81,13 +84,14 @@ int main(int argc, const char * argv[])
 		target_set.push_back("../data/upper_body_depth/frame-"+ss.str()+".depth.png");
 		ss.str("");
 	}
-	//target_set.push_back("../data/upper_body_depth/frame-000110.depth.png");
+	//target_set.push_back("../data/upper_body_depth/frame-000015.depth.png");
+	//target_set.push_back("../data/upper_body_depth/frame-000030.depth.png");
 	//target_set.push_back("../data/upper_body_depth/frame-000115.depth.png");
 	//target_set.push_back("../data/upper_body_depth/frame-000150.depth.png");
 
 	
 	sourceMesh = createMesh("../output_mesh/after_integration"+std::to_string(0)+".ply");
-	solver = new CombinedSolver(sourceMesh, target_set, params, &volume, &vertices, &normals, &triangles);
+	solver = new CombinedSolver(target_set, params, &volume, &vertices, &normals, &triangles, &vol_idx, &rel_coors);
 	//solver->solveAll();
 		
 	for (int i=0; i<target_set.size(); i++) {
@@ -98,7 +102,7 @@ int main(int argc, const char * argv[])
 		std::cout << "target mesh: " << targetFiles[0] << std::endl;
 		//solver = new CombinedSolver(sourceMesh, targetFiles, params, &volume, &vertices, &normals, &triangles);
 		solver->set_targets(targetFiles);
-		solver->set_vnt(&vertices, &normals, &triangles);
+		solver->set_vnt(&vertices, &normals, &triangles, &vol_idx);
 		solver->solveAll();
 		// test
 		//res = solver->result();
@@ -107,15 +111,15 @@ int main(int argc, const char * argv[])
 		solver->update_grid();
 		volume.Upsample(*(solver->get_grid()), solver->get_grid_dims());
 		ReadDepth(target_name, im_height, im_width, depth_im);
-		volume.Integrate(depth_im, mat_K, world2cam);
-		vertices.clear(); triangles.clear(); normals.clear();
-		extract_surface(volume, vertices, triangles, normals);
+		volume.Integrate(depth_im, mat_K, world2cam, 0);
+		vertices.clear(); triangles.clear(); normals.clear(); vol_idx.clear(); rel_coors.clear();
+		extract_surface(volume, vertices, triangles, normals, vol_idx, rel_coors);
 		//write_to_ply("../output_mesh/after_integration"+std::to_string(i+1)+".ply",vertices,triangles);
 		//solver->saveGraphResults();
 		//delete sourceMesh;
 		//delete solver;
 	}
-	//solver->saveGraphResults();
+	solver->saveGraphResults();
 	write_to_ply("../output_mesh/after_integration_final.ply",vertices,triangles);
 	delete sourceMesh;
 	delete solver;

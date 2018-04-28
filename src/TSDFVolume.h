@@ -17,7 +17,7 @@ public:
 
 	void deallocate();
 
-	void Integrate(float* depth_map,float* cam_K, float* cam2base);
+	void Integrate(float* depth_map,float* cam_K, float* cam2base, bool start);
 
 	float* get_grid(){
 		return m_distances;
@@ -36,6 +36,10 @@ public:
 
 	}
 
+	unsigned int* get_state(){
+		return m_state;
+	}
+	
 	void InitSubGrid(std::vector<float3>& sg_pos, int3 sg_dims);
 	void Upsample(std::vector<float3>& sg_pos, int3 sg_dims);
 	/*

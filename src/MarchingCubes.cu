@@ -4,6 +4,7 @@
 #include "MC_table.cu"
 #include "cudaUtil.h"
 #include <math.h>
+#include <assert.h>
 
 using namespace std;
 
@@ -94,7 +95,7 @@ int compute_edge_intersects( uint8_t cube_index,
 
 __device__
 void compute_cube_vertices(int x, int y, int width, const float3* layer1, const float3* layer2, float3 cube_vertices[8]){
-	  int base = y * width + x;
+	int base = y * width + x;
 	  cube_vertices[0] = layer1[base];
 	  cube_vertices[1] = layer1[base + 1];
 	  cube_vertices[2] = layer2[base + 1];
@@ -104,6 +105,14 @@ void compute_cube_vertices(int x, int y, int width, const float3* layer1, const 
       cube_vertices[6] = layer2[base + width + 1];
 	  cube_vertices[7] = layer2[base + width];
 	  
+	/*cube_vertices[0] = layer2[base];
+	cube_vertices[1] = layer2[base + 1];
+	cube_vertices[2] = layer1[base + 1];
+	cube_vertices[3] = layer1[base];
+	cube_vertices[4] = layer2[base + width];
+	cube_vertices[5] = layer2[base + width + 1];
+	cube_vertices[6] = layer1[base + width + 1];
+	cube_vertices[7] = layer1[base + width];*/
 }
 /**
  * @param values An array of eight values from the TSDF indexed per the edge_table include file
@@ -149,7 +158,10 @@ void mc_kernel( const float * tsdf_values_layer_1,
 
                 // Output variables
 				float3 *vertices,
-                int3 *triangles ) {
+                int3 *triangles ,
+                
+                // voxel state
+                unsigned int* state) {
 
 
 	// Extract the voxel X and Y coordinates which describe the position in the layers
@@ -170,23 +182,36 @@ void mc_kernel( const float * tsdf_values_layer_1,
 
 		// Load voxel values for the cube
 		float voxel_values[8] = {
-			tsdf_values_layer_1[voxel_index],							//	vx,   vy,   vz
-			tsdf_values_layer_1[voxel_index + 1],						//	vx + 1,   vy,   vz
-			tsdf_values_layer_2[voxel_index + 1],		//	vx + 1, vy, vz+1
-			tsdf_values_layer_2[voxel_index],		//	vx, vy , vz+1
-			tsdf_values_layer_1[voxel_index + size.x],						//	vx, vy+1,	vz
-			tsdf_values_layer_1[voxel_index + size.x+ 1],						//	vx+1, vy+1, 	vz
-			tsdf_values_layer_2[voxel_index + size.x+ 1],	//	vx+1, vy+1, vz+1
-			tsdf_values_layer_2[voxel_index + size.x]	//	vx, vy+1, vz + 1
+			tsdf_values_layer_1[voxel_index],				//	vx,   	vy,   	vz
+			tsdf_values_layer_1[voxel_index + 1],			//	vx + 1, vy,   	vz
+			tsdf_values_layer_2[voxel_index + 1],			//	vx + 1, vy, 	vz+1
+			tsdf_values_layer_2[voxel_index],				//	vx, 	vy , 	vz+1
+			tsdf_values_layer_1[voxel_index + size.x],		//	vx, 	vy+1,	vz
+			tsdf_values_layer_1[voxel_index + size.x+ 1],	//	vx+1, 	vy+1, 	vz
+			tsdf_values_layer_2[voxel_index + size.x+ 1],	//	vx+1, 	vy+1, 	vz+1
+			tsdf_values_layer_2[voxel_index + size.x]		//	vx, 	vy+1, 	vz + 1
 		};
-
+		/*float voxel_values[8] = {
+			tsdf_values_layer_2[voxel_index],				//	vx,   	vy,   	vz+1
+			tsdf_values_layer_2[voxel_index + 1],			//	vx + 1, vy,   	vz+1
+			tsdf_values_layer_1[voxel_index + 1],			//	vx + 1, vy,		vz
+			tsdf_values_layer_1[voxel_index],				//	vx, 	vy , 	vz
+			tsdf_values_layer_2[voxel_index + size.x],		//	vx, 	vy+1,	vz+1
+			tsdf_values_layer_2[voxel_index + size.x+ 1],	//	vx+1, 	vy+1, 	vz+1
+			tsdf_values_layer_1[voxel_index + size.x+ 1],	//	vx+1, 	vy+1, 	vz
+			tsdf_values_layer_1[voxel_index + size.x]		//	vx, 	vy+1, 	vz
+		};*/
+		
 		// Compute the cube type
 		uint8_t cube_type = cube_type_for_values( voxel_values );
-
+		int3 idx = make_int3(vx, vy, vz);
+		int idx_1D = idx.z * (size.y * size.x) + idx.y * size.x + idx.x;
+		if (state[idx_1D] != 2) {cube_type =0x00;}
+		
 		// If it's a non-trivial cube_type, process it
 		if ( ( cube_type != 0 ) && ( cube_type != 0xFF ) ) {
 
-			// Compuyte the coordinates of the vertices of the cube
+			// Compute the coordinates of the vertices of the cube
 			float3 cube_vertices[8];
 			compute_cube_vertices(vx,vy,size.x, centers_layer_1, centers_layer_2, cube_vertices);
 
@@ -225,10 +250,16 @@ void process_kernel_output( dim3 size,
                             const int3            * h_triangles,
                             vector<float3>&    vertices,
                             vector<int3>&      triangles,
-							vector<float3>&	   normals) {
+							vector<float3>&	   normals,
+							vector<int3>&	   vol_idx,
+							vector<float3>&	   rel_coors,
+							float3 * h_layer1,
+							float3 * h_layer2,
+							int z) {
 	
 	// test
-	int test_count = 0;
+	//int test_count = 0;
+	int3 sc = make_int3(15, 15, 20); //set it as input later on
 
 	// For all but last row of voxels
 	int cube_index = 0;
@@ -274,6 +305,19 @@ void process_kernel_output( dim3 size,
 				}*/
 
 				// Remap triangle vertex indices to global indices
+				// new
+				int voxel_index =  (size.x * y) + x;
+				float3 grid_pos[8] = {
+					h_layer1[voxel_index],				//	vx,   	vy,   	vz
+					h_layer1[voxel_index + 1],			//	vx + 1, vy,   	vz
+					h_layer2[voxel_index + 1],			//	vx + 1, vy, 	vz+1
+					h_layer2[voxel_index],				//	vx, 	vy , 	vz+1
+					h_layer1[voxel_index + size.x],		//	vx, 	vy+1,	vz
+					h_layer1[voxel_index + size.x+ 1],	//	vx+1, 	vy+1, 	vz
+					h_layer2[voxel_index + size.x+ 1],	//	vx+1, 	vy+1, 	vz+1
+					h_layer2[voxel_index + size.x]		//	vx, 	vy+1, 	vz + 1
+				}; 
+				
 				int remap[] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
 				for ( int tv = 0; tv < 3; tv++ ) {
 					int vid = tri_vertices[tv];
@@ -282,7 +326,119 @@ void process_kernel_output( dim3 size,
 						// This vertex hasnt been remapped (ie stored) yet
 						vertices.push_back( verts[ vid ] );
 						normals.push_back( v_norm );
-
+						vol_idx.push_back( make_int3(x,y,z) );
+						
+						// test for adding relative coordinates
+						float3 rel_coor = make_float3(0.1,0.1,0.1);
+						if (vid == 0) { 		//between v0 and v1
+							float3 pv_p0 = verts[vid] - grid_pos[0];
+							float3 p1_p0 = grid_pos[1] - grid_pos[0];
+							float ratio = pv_p0.x / p1_p0.x;
+							//assert(pv_p0.y == p1_p0.y*ratio && pv_p0.z == p1_p0.z*ratio && "vid=0"); // ratio should be the same for x,y,z						
+							rel_coor = make_float3((x%sc.x+ratio)/(float)sc.x, (y%sc.y)/(float)sc.y, (z%sc.z)/(float)sc.z);							
+						} 
+						else if (vid == 1){ 	//between v2 and v1
+							float3 pv_p0 = verts[vid] - grid_pos[1];
+							float3 p1_p0 = grid_pos[2] - grid_pos[1];
+							float ratio = pv_p0.z / p1_p0.z;
+							//assert(pv_p0.x == p1_p0.x*ratio && pv_p0.y == p1_p0.y*ratio && "vid=1"); // ratio should be the same for x,y,z						
+							rel_coor = make_float3( (x%sc.x+1)/(float)sc.x, (y%sc.y)/(float)sc.y, (z%sc.z+ratio)/(float)sc.z);							
+						}
+						else if (vid == 2) {	//between v3 and v2
+							float3 pv_p0 = verts[vid] - grid_pos[3];
+							float3 p1_p0 = grid_pos[2] - grid_pos[3];
+							float ratio = pv_p0.x / p1_p0.x;
+							//assert(pv_p0.y == p1_p0.y*ratio && pv_p0.z == p1_p0.z*ratio && "vid=2"); // ratio should be the same for x,y,z						
+							rel_coor = make_float3( (x%sc.x+ratio)/(float)sc.x, (y%sc.y)/(float)sc.y, (z%sc.z+1)/(float)sc.z);						
+						}
+						else if (vid == 3) {	//between v3 and v0
+							float3 pv_p0 = verts[vid] - grid_pos[0];
+							float3 p1_p0 = grid_pos[3] - grid_pos[0];
+							float ratio = pv_p0.z / p1_p0.z;
+							//assert(pv_p0.x == p1_p0.x*ratio && pv_p0.y == p1_p0.y*ratio && "vid=3"); // ratio should be the same for x,y,z						
+							rel_coor = make_float3( (x%sc.x)/(float)sc.x, (y%sc.y)/(float)sc.y, (z%sc.z+ratio)/(float)sc.z);						
+						}					
+						else if (vid == 4) {	//between v4 and v5
+							float3 pv_p0 = verts[vid] - grid_pos[4];
+							float3 p1_p0 = grid_pos[5] - grid_pos[4];
+							float ratio = pv_p0.x / p1_p0.x;
+							//assert(pv_p0.y == p1_p0.y*ratio && pv_p0.z == p1_p0.z*ratio && "vid=4"); // ratio should be the same for x,y,z						
+							rel_coor = make_float3( (x%sc.x+ratio)/(float)sc.x, (y%sc.y+1)/(float)sc.y, (z%sc.z)/(float)sc.z);						
+						}								
+						else if (vid == 5) {	//between v6 and v5
+							float3 pv_p0 = verts[vid] - grid_pos[5];
+							float3 p1_p0 = grid_pos[6] - grid_pos[5];
+							float ratio = pv_p0.z / p1_p0.z;
+							//assert(pv_p0.x == p1_p0.x*ratio && pv_p0.y == p1_p0.y*ratio && "vid=5"); // ratio should be the same for x,y,z						
+							rel_coor = make_float3( (x%sc.x+1)/(float)sc.x, (y%sc.y+1)/(float)sc.y, (z%sc.z+ratio)/(float)sc.z);						
+						}		
+						else if (vid == 6) {	//between v7 and v6
+							float3 pv_p0 = verts[vid] - grid_pos[7];
+							float3 p1_p0 = grid_pos[6] - grid_pos[7];
+							float ratio = pv_p0.x / p1_p0.x;
+							//assert(pv_p0.y == p1_p0.y*ratio && pv_p0.z == p1_p0.z*ratio && "vid=6"); // ratio should be the same for x,y,z						
+							rel_coor = make_float3( (x%sc.x+ratio)/(float)sc.x, (y%sc.y+1)/(float)sc.y, (z%sc.z+1)/(float)sc.z);						
+						}									
+						else if (vid == 7) {	//between v7 and v4
+							float3 pv_p0 = verts[vid] - grid_pos[4];
+							float3 p1_p0 = grid_pos[7] - grid_pos[4];
+							float ratio = pv_p0.z / p1_p0.z;
+							//assert(pv_p0.x == p1_p0.x*ratio && pv_p0.y == p1_p0.y*ratio && "vid=7"); // ratio should be the same for x,y,z						
+							rel_coor = make_float3( (x%sc.x)/(float)sc.x, (y%sc.y+1)/(float)sc.y, (z%sc.z+ratio)/(float)sc.z);						
+						}
+						else if (vid == 8) {	//between v0 and v4
+							float3 pv_p0 = verts[vid] - grid_pos[0];
+							float3 p1_p0 = grid_pos[4] - grid_pos[0];
+							float ratio = pv_p0.y / p1_p0.y;
+							//assert(pv_p0.x == p1_p0.x*ratio && pv_p0.z == p1_p0.z*ratio && "vid=8"); // ratio should be the same for x,y,z						
+							rel_coor = make_float3( (x%sc.x)/(float)sc.x, (y%sc.y+ratio)/(float)sc.y, (z%sc.z)/(float)sc.z);						
+						}								
+						else if (vid == 9) {	//between v1 and v5
+							float3 pv_p0 = verts[vid] - grid_pos[1];
+							float3 p1_p0 = grid_pos[5] - grid_pos[1];
+							float ratio = pv_p0.y / p1_p0.y;							
+							//assert(pv_p0.x == p1_p0.x*ratio && pv_p0.z == p1_p0.z*ratio && "vid=9"); // ratio should be the same for x,y,z						
+							rel_coor = make_float3( (x%sc.x+1)/(float)sc.x, (y%sc.y+ratio)/(float)sc.y, (z%sc.z)/(float)sc.z);						
+						}							
+						else if (vid == 10) {	//between v2 and v6
+							float3 pv_p0 = verts[vid] - grid_pos[2];
+							float3 p1_p0 = grid_pos[6] - grid_pos[2];
+							float ratio = pv_p0.y / p1_p0.y;
+							
+							//assert(pv_p0.x == p1_p0.x*ratio && pv_p0.z == p1_p0.z*ratio && "vid=10"); // ratio should be the same for x,y,z	
+							
+							// sometimes this will be violated...
+							if (!((pv_p0.x - p1_p0.x*ratio < 0.001) && (pv_p0.z - p1_p0.z*ratio <0.001))){
+								std::cout << "tris[tri_index] x: " << tris[tri_index].x << " y: " << tris[tri_index].y << " z: " << tris[tri_index].z << std::endl;
+								std::cout << "verts[vid] x: " << verts[vid].x << " y: " << verts[vid].y << " z: " << verts[vid].z << std::endl;
+								std::cout << "grid_pos[2] x: " << grid_pos[2].x << " y: " << grid_pos[2].y << " z: " << grid_pos[2].z << std::endl;
+								std::cout << "grid_pos[6] x: " << grid_pos[6].x << " y: " << grid_pos[6].y << " z: " << grid_pos[6].z << std::endl;
+								std::cout << "pv_p0 x: " << pv_p0.x << " y: " << pv_p0.y << " z: " << pv_p0.z << std::endl;
+								std::cout << "p1_p0 x: " << p1_p0.x << " y: " << p1_p0.y << " z: " << p1_p0.z << std::endl;
+								std::cout << "i: " << x << " j: " << y << " k: " << z << std::endl;
+								std::cout << "x: " << pv_p0.x / p1_p0.x << " y: " << pv_p0.y / p1_p0.y << " z: " << pv_p0.z / p1_p0.z << std::endl;							
+							}
+							//assert((pv_p0.x - p1_p0.x*ratio < 0.001) && (pv_p0.z - p1_p0.z*ratio <0.001) && "vid=10"); // ratio should be the same for x,y,z					
+							rel_coor = make_float3( (x%sc.x+1)/(float)sc.x, (y%sc.y+ratio)/(float)sc.y, (z%sc.z+1)/(float)sc.z);						
+						}		
+						else if (vid == 11) {	//between v3 and v7
+							float3 pv_p0 = verts[vid] - grid_pos[3];
+							float3 p1_p0 = grid_pos[7] - grid_pos[3];
+							float ratio = pv_p0.y / p1_p0.y;
+							//assert(pv_p0.x == p1_p0.x*ratio && pv_p0.z == p1_p0.z*ratio && "vid=11"); // ratio should be the same for x,y,z						
+							rel_coor = make_float3( (x%sc.x)/(float)sc.x, (y%sc.y+ratio)/(float)sc.y, (z%sc.z+1)/(float)sc.z);						
+						} 
+						else {
+							std::cout << "vid: " << vid << std::endl;
+							assert(1<0);
+						}
+						//if (abs(rel_coor.x) < 0.000001)	rel_coor.x = 0;						
+						//if (abs(rel_coor.y) < 0.000001)	rel_coor.y = 0;
+						//if (abs(rel_coor.z) < 0.000001)	rel_coor.z = 0;
+						
+						rel_coors.push_back(rel_coor);	
+						
+																					
 						// Get the new ID
 						vertexid = vertices.size() - 1;
 
@@ -312,7 +468,7 @@ void process_kernel_output( dim3 size,
 }
 
 __host__
-void extract_surface(TSDFVolume & volume, vector<float3>& vertices, vector<int3>& triangles, vector<float3>& normals){
+void extract_surface(TSDFVolume & volume, vector<float3>& vertices, vector<int3>& triangles, vector<float3>& normals, vector<int3>& vol_idx, vector<float3>& rel_coors){
 	// Allocate storage on device and locally
 	// Fail if not possible
 	dim3 size = volume.get_size();
@@ -366,6 +522,12 @@ void extract_surface(TSDFVolume & volume, vector<float3>& vertices, vector<int3>
 	clock.tik();
 	const float* grid = volume.get_grid();
 	const float3* centers = volume.get_deform();
+	
+	// new
+	// temporary host vertices
+	float3* h_layer1_center = new float3 [layer_size];
+	float3* h_layer2_center = new float3 [layer_size];
+	
 	for ( int vz = 0; vz < size.z - 1; vz++ ) {
 
 		// Set up for layer
@@ -383,7 +545,7 @@ void extract_surface(TSDFVolume & volume, vector<float3>& vertices, vector<int3>
 									layer1_center, layer2_center,
 		                               size,
 									   volume.get_origin(),
-		                               vz, d_vertices, d_triangles );
+		                               vz, d_vertices, d_triangles, volume.get_state());
 
 		err = cudaDeviceSynchronize( );		
 		if(err!=cudaSuccess)
@@ -401,9 +563,20 @@ void extract_surface(TSDFVolume & volume, vector<float3>& vertices, vector<int3>
 		
 
 		// All through all the triangles and vertices and add them to master lists
-		process_kernel_output(size, h_vertices, h_triangles, vertices, triangles, normals);
+		//new
+		err = cudaMemcpy( h_layer1_center, layer1_center, layer_size * sizeof( float3 ), cudaMemcpyDeviceToHost);
+		if(err!=cudaSuccess) cout << "Copy of layer1 data from device failed " << endl;		
+		err = cudaMemcpy( h_layer2_center, layer2_center, layer_size * sizeof( float3 ), cudaMemcpyDeviceToHost);
+		if(err!=cudaSuccess) cout << "Copy of layer2 data from device failed " << endl;		
+		
+		process_kernel_output(size, h_vertices, h_triangles, vertices, triangles, normals, vol_idx, rel_coors, h_layer1_center, h_layer2_center, vz);
 		
 	}
+	//release temporary host vertices
+	delete h_layer1_center;
+	delete h_layer2_center;
+	
+	
 	clock.tok();
 	std::cout << "Total elapsed time:" << clock.toMilliseconds() << " ms" << std::endl;
 	// Free memory and done
