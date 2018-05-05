@@ -604,7 +604,7 @@ class CombinedSolver : public CombinedSolverBase
 				m_relativeCoords[i] = (*m_rel_coors)[i];// can replace m_relativeCoords later on //pp - p_sg;		
 				
 				// test
-				int3 voxelId = pInt;
+				/*int3 voxelId = pInt;
 				float3 relativeCoords = m_relativeCoords[i];
 				float3 p000 = h_gridVertexPosFloat3[getIndex1D(voxelId + make_int3(0, 0, 0))];
 				float3 p001 = h_gridVertexPosFloat3[getIndex1D(voxelId + make_int3(0, 0, 1))];
@@ -633,7 +633,7 @@ class CombinedSolver : public CombinedSolverBase
 					std::cout << "p000 x: " << p000.x << " y: " << p000.y << " z: " << p000.z << std::endl;
 					std::cout << "relativeCoords x: " << relativeCoords.x << " y: " << relativeCoords.y << " z: " << relativeCoords.z << std::endl;
 					//assert( length(p-pp) < 0.001 ); // test - p and pp should be close	!!! sometimes fail, need to investigate		
-				}
+				}*/
 				// --
 		
 				w.push_back(i); 

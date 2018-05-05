@@ -45,10 +45,8 @@ int main(int argc, const char * argv[])
     //std::string sourceFilename = "../data/upperbody.ply";  
 	std::string sourceFilename = "../data/upper_body_depth/frame-000000.depth.png";
 
-	//float3 voxel_size = make_float3(0.006f, 0.006f, 0.012f);
 	float3 voxel_size = make_float3(1.0f/361.0f, 1.0f/376.0f, 0.4f/61.0f);
 	//float3 voxel_size = make_float3(0.6f/361.0f, 0.7f/376.0f, 0.25f/61.0f);
-  	//TSDFVolume volume(500,520,80, voxel_size);
 	//TSDFVolume volume(361,376,71, make_float3(-0.5611f,-0.4208f, 0.65f), voxel_size);
 	TSDFVolume volume(361,376,61, make_float3(-0.5611f,-0.4208f, 0.65f), voxel_size);
 	//TSDFVolume volume(361,376,61, make_float3(-0.36f,-0.26f, 0.79f), voxel_size);
@@ -86,9 +84,6 @@ int main(int argc, const char * argv[])
 	}
 	//target_set.push_back("../data/upper_body_depth/frame-000015.depth.png");
 	//target_set.push_back("../data/upper_body_depth/frame-000030.depth.png");
-	//target_set.push_back("../data/upper_body_depth/frame-000115.depth.png");
-	//target_set.push_back("../data/upper_body_depth/frame-000150.depth.png");
-
 	
 	sourceMesh = createMesh("../output_mesh/after_integration"+std::to_string(0)+".ply");
 	solver = new CombinedSolver(target_set, params, &volume, &vertices, &normals, &triangles, &vol_idx, &rel_coors);
