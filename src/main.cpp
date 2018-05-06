@@ -9,6 +9,8 @@
 #include <sstream>
 #include <iomanip>
 
+#include <ctime>
+
 static SimpleMesh* createMesh(std::string filename) {
     SimpleMesh* mesh = new SimpleMesh();
     if (!OpenMesh::IO::read_mesh(*mesh, filename))
@@ -45,10 +47,11 @@ int main(int argc, const char * argv[])
     //std::string sourceFilename = "../data/upperbody.ply";  
 	std::string sourceFilename = "../data/upper_body_depth/frame-000000.depth.png";
 
+	// volume(x_length, y_length, z_length, origin, voxel_size, subgrid_scale)
 	float3 voxel_size = make_float3(1.0f/361.0f, 1.0f/376.0f, 0.4f/61.0f);
 	//float3 voxel_size = make_float3(0.6f/361.0f, 0.7f/376.0f, 0.25f/61.0f);
 	//TSDFVolume volume(361,376,71, make_float3(-0.5611f,-0.4208f, 0.65f), voxel_size);
-	TSDFVolume volume(361,376,61, make_float3(-0.5611f,-0.4208f, 0.65f), voxel_size);
+	TSDFVolume volume(361,376,61, make_float3(-0.5611f,-0.4208f, 0.65f), voxel_size, make_int3(15,15,20));
 	//TSDFVolume volume(361,376,61, make_float3(-0.36f,-0.26f, 0.79f), voxel_size);
 
 	float mat_K[3 * 3] = {570.342, 0, 320,  0, 570.342, 240,  0, 0, 1};
@@ -88,7 +91,12 @@ int main(int argc, const char * argv[])
 	sourceMesh = createMesh("../output_mesh/after_integration"+std::to_string(0)+".ply");
 	solver = new CombinedSolver(target_set, params, &volume, &vertices, &normals, &triangles, &vol_idx, &rel_coors);
 	//solver->solveAll();
-		
+
+	// record the processing time
+    std::clock_t start;
+    double duration;
+    start = std::clock();		
+    
 	for (int i=0; i<target_set.size(); i++) {
 		//sourceMesh = createMesh("../output_mesh/after_integration"+std::to_string(i)+".ply");
 		target_name = target_set[i];
@@ -114,7 +122,11 @@ int main(int argc, const char * argv[])
 		//delete sourceMesh;
 		//delete solver;
 	}
-	solver->saveGraphResults();
+	// output the processing time
+    duration = ( std::clock() - start ) / (double) CLOCKS_PER_SEC;
+    std::cout<<std::endl<<"total time: "<< duration << " seconds" <<std::endl;
+    
+	//solver->saveGraphResults();
 	write_to_ply("../output_mesh/after_integration_final.ply",vertices,triangles);
 	delete sourceMesh;
 	delete solver;

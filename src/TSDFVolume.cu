@@ -110,10 +110,11 @@ void deformation( float3* grid, float3 * deformation, dim3 grid_size ) {
 }*/
 
 __host__
-TSDFVolume::TSDFVolume(int x, int y, int z, float3 ori, float3 size){
+TSDFVolume::TSDFVolume(int x, int y, int z, float3 ori, float3 size, int3 sg_scale){
 		max_threads = 512;
-		//x+=1; y+=1; z+=1;
 
+		m_sg_scale = sg_scale;
+		
 		m_size.x = x;
 		m_size.y = y;
 		m_size.z = z;
@@ -334,12 +335,12 @@ __host__
 void TSDFVolume::InitSubGrid(std::vector<float3>& sg_pos, int3 sg_dims){
 	float3 * temp_grid = new float3[m_size.x * m_size.y * m_size.z];
 	cudaMemcpy(temp_grid, grid_coord, m_size.x * m_size.y * m_size.z * sizeof(float3), cudaMemcpyDeviceToHost);
-	int3 grid_scale;
+	int3 grid_scale = m_sg_scale;
 	int sg_index, volume_index;
-	grid_scale.x = 15; //m_size.x / sg_dims.x;
-	grid_scale.y = 15; //m_size.y / sg_dims.y;
-	grid_scale.z = 20; //m_size.z / sg_dims.z;
-	std::cout<<"test scale "<< grid_scale.x<<" "<<grid_scale.y<<" "<<grid_scale.z<<" "<<std::endl;
+	//grid_scale.x = 15; //m_size.x / sg_dims.x;
+	//grid_scale.y = 15; //m_size.y / sg_dims.y;
+	//grid_scale.z = 20; //m_size.z / sg_dims.z;
+	//std::cout<<"test scale "<< grid_scale.x<<" "<<grid_scale.y<<" "<<grid_scale.z<<" "<<std::endl;
 	for (int i = 0; i < sg_dims.x; i++) {
 		for (int j = 0; j < sg_dims.y; j++) {
 			for (int k = 0; k < sg_dims.z; k++){	
@@ -359,57 +360,62 @@ int index_3to1(int3 idx, int3 grid_dims)
 	return idx.z * (grid_dims.y * grid_dims.x) + idx.y * grid_dims.x + idx.x;
 }
 
+__global__
+void upsample(float3 * grid_coor, float3 * sg_pos, int3 grid_scale, dim3 size, dim3 sg_size) {
+	int grid_index = blockIdx.x * blockDim.x + threadIdx.x;
+	if (grid_index < size.x * size.y * size.z) {
+		int3 idx = index_1to3(grid_index, size);
+		
+		float x = idx.x/(float)grid_scale.x;
+		float y = idx.y/(float)grid_scale.y;
+		float z = idx.z/(float)grid_scale.z;
+		int x0 = floor(x); int x1 = ceil(x);
+		int y0 = floor(y); int y1 = ceil(y);
+		int z0 = floor(z); int z1 = ceil(z);
+
+		x = x - x0;
+		y = y - y0;
+		z = z - z0;
+		float3 p000 = sg_pos[sg_index_3to1(make_int3(x0, y0, z0), sg_size)];
+		float3 p001 = sg_pos[sg_index_3to1(make_int3(x0, y0, z1), sg_size)];
+		float3 p010 = sg_pos[sg_index_3to1(make_int3(x0, y1, z0), sg_size)];
+		float3 p011 = sg_pos[sg_index_3to1(make_int3(x0, y1, z1), sg_size)];
+		float3 p100 = sg_pos[sg_index_3to1(make_int3(x1, y0, z0), sg_size)];
+		float3 p101 = sg_pos[sg_index_3to1(make_int3(x1, y0, z1), sg_size)];
+		float3 p110 = sg_pos[sg_index_3to1(make_int3(x1, y1, z0), sg_size)];
+		float3 p111 = sg_pos[sg_index_3to1(make_int3(x1, y1, z1), sg_size)];
+
+		float3 px00 = (1.0f - x)*p000 + x*p100;
+		float3 px01 = (1.0f - x)*p001 + x*p101;
+		float3 px10 = (1.0f - x)*p010 + x*p110;
+		float3 px11 = (1.0f - x)*p011 + x*p111;
+
+		float3 pxx0 = (1.0f - y)*px00 + y*px10;
+		float3 pxx1 = (1.0f - y)*px01 + y*px11;
+
+		float3 p = (1.0f - z)*pxx0 + z*pxx1;
+
+		grid_coor[sg_index_3to1(make_int3(idx.x, idx.y, idx.z), size)] = p;		
+	}	
+}
+
 __host__
 void TSDFVolume::Upsample(std::vector<float3>& sg_pos, int3 sg_dims){
-	float3 * temp_grid = new float3[m_size.x * m_size.y * m_size.z];
-	cudaMemcpy(temp_grid, grid_coord, m_size.x * m_size.y * m_size.z * sizeof(float3), cudaMemcpyDeviceToHost);
+	// pass subgrid positions into gpu
+	float3 * sg_pos_gpu;
+	cudaSafeCall( cudaMalloc(&sg_pos_gpu, sg_pos.size() * sizeof(float3)) );
+	cudaSafeCall( cudaMemcpy(sg_pos_gpu, sg_pos.data(), sg_pos.size() * sizeof(float3), cudaMemcpyHostToDevice) );
+	
+	dim3 sg_size;
+	sg_size.x = sg_dims.x;
+	sg_size.y = sg_dims.y;
+	sg_size.z = sg_dims.z;
 
-	int3 grid_scale;
-	grid_scale.x = 15; //m_size.x / sg_dims.x;
-	grid_scale.y = 15; //m_size.y / sg_dims.y;
-	grid_scale.z = 20; //m_size.z / sg_dims.z;
-	std::cout<<"test scale "<< grid_scale.x<<" "<<grid_scale.y<<" "<<grid_scale.z<<" "<<std::endl;
-	for (int i = 0; i < m_size.x; i++) {
-		for (int j = 0; j < m_size.y; j++) {
-			for (int k = 0; k < m_size.z; k++){	
-
-				float x = i/(float)grid_scale.x;
-				float y = j/(float)grid_scale.y;
-				float z = k/(float)grid_scale.z;
-				int x0 = floor(x); int x1 = ceil(x);
-				int y0 = floor(y); int y1 = ceil(y);
-				int z0 = floor(z); int z1 = ceil(z);
-
-				x = x - x0;
-				y = y - y0;
-				z = z - z0;
-				float3 p000 = sg_pos[index_3to1(make_int3(x0, y0, z0), sg_dims)];
-				float3 p001 = sg_pos[index_3to1(make_int3(x0, y0, z1), sg_dims)];
-				float3 p010 = sg_pos[index_3to1(make_int3(x0, y1, z0), sg_dims)];
-				float3 p011 = sg_pos[index_3to1(make_int3(x0, y1, z1), sg_dims)];
-				float3 p100 = sg_pos[index_3to1(make_int3(x1, y0, z0), sg_dims)];
-				float3 p101 = sg_pos[index_3to1(make_int3(x1, y0, z1), sg_dims)];
-				float3 p110 = sg_pos[index_3to1(make_int3(x1, y1, z0), sg_dims)];
-				float3 p111 = sg_pos[index_3to1(make_int3(x1, y1, z1), sg_dims)];
-
-				float3 px00 = (1.0f - x)*p000 + x*p100;
-				float3 px01 = (1.0f - x)*p001 + x*p101;
-				float3 px10 = (1.0f - x)*p010 + x*p110;
-				float3 px11 = (1.0f - x)*p011 + x*p111;
-
-				float3 pxx0 = (1.0f - y)*px00 + y*px10;
-				float3 pxx1 = (1.0f - y)*px01 + y*px11;
-
-				float3 p = (1.0f - z)*pxx0 + z*pxx1;
-
-				int3 g_dims;
-				g_dims.x = m_size.x; g_dims.y = m_size.y; g_dims.z = m_size.z;
-				temp_grid[index_3to1(make_int3(i,j,k), g_dims)] = p;
-
-				//std::cout << "test " << i<<" "<<j<<" "<<k <<" "<<tmp.x<<" "<<tmp.y<<" "<<tmp.z<<std::endl;
-			}
-		}
-	}
-	cudaMemcpy(grid_coord, temp_grid, m_size.x * m_size.y * m_size.z * sizeof(float3), cudaMemcpyHostToDevice);
-	delete temp_grid;
+	//int3 grid_scale = make_int3(15,15,20);
+	//std::cout<<"test scale "<< grid_scale.x<<" "<<grid_scale.y<<" "<<grid_scale.z<<" "<<std::endl;
+	
+	int blocknum = ceil(m_size.x*m_size.y*m_size.z / (float)max_threads);
+	upsample<<< blocknum, max_threads >>>(grid_coord, sg_pos_gpu, m_sg_scale, m_size, sg_size);
+	cudaSafeCall( cudaDeviceSynchronize() );
+	cudaSafeCall( cudaFree(sg_pos_gpu) );
 }

@@ -7,7 +7,7 @@
 
 class TSDFVolume{
 public:
-	TSDFVolume(int x, int y, int z, float3 ori, float3 size);
+	TSDFVolume(int x, int y, int z, float3 ori, float3 size, int3 sg_scale);
 
 	dim3 get_size(){
 		return m_size;
@@ -40,16 +40,16 @@ public:
 		return m_state;
 	}
 	
+	int3 get_scale(){
+		return m_sg_scale;
+	}
+	
 	void InitSubGrid(std::vector<float3>& sg_pos, int3 sg_dims);
 	void Upsample(std::vector<float3>& sg_pos, int3 sg_dims);
-	/*
-	float3* get_deform(){
-		return m_deform;
-	}*/
 
 private:
 	float3 origin;
-
+	int3 m_sg_scale;
 	dim3 m_size;
 
 	float3 voxel_size;

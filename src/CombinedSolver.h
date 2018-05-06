@@ -60,7 +60,7 @@ class CombinedSolver : public CombinedSolverBase
 
 			dim3 vol_size = m_volume->get_size();
 			
-			m_scale = make_int3(15, 15, 20);
+			m_scale = m_volume->get_scale();
 			
 			std::cout << "vol_size.x "<<vol_size.x<<" m_scale.x "<<m_scale.x<<std::endl;
 			assert(((vol_size.x - 1) % m_scale.x) == 0);
