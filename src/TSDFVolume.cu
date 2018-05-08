@@ -7,21 +7,6 @@
 //using namespace std;
 
 __device__
-float3 bilinear( float3 c00, float3 c01, float3 c10, float3 c11){
-    float3  a = c00 * 0.5 + c10 * 0.5; 
-    float3  b = c01 * 0.5 + c11 * 0.5; 
-    return (a * 0.5 + b * 0.5); 
-}
-
-__device__
-float3 trilinear(float3 c000, float3 c001, float3 c010, float3 c011, float3 c100, float3 c101, float3 c110, float3 c111){
-	float3 c0, c1;
-	c0 = bilinear(c000, c100, c010, c110);
-	c1 = bilinear(c001, c101, c011, c111);
-	return (c0 * 0.5 + c1 * 0.5);
-}
-
-__device__
 int3 index_1to3(int idx, dim3 grid_size) {
 	int3 r_idx;
 	int xy = (grid_size.x * grid_size.y);
@@ -72,43 +57,6 @@ void initialize_grid(float3 * grid, dim3 grid_size, float3 voxel_size, float3 gr
 	}
 }
 
-/*
-__global__
-void deformation( float3* grid, float3 * deformation, dim3 grid_size ) {
-
-    // Extract the voxel Y and Z coordinates we then iterate over X
-    int vy = threadIdx.x;
-    int vz = blockIdx.x;
-	float3 c000, c001,c010,c011,c100,c101,c110,c111;
-	size_t layer_size =  (grid_size.x + 1) * (grid_size.y + 1);
-    // If this thread is in range
-    if ( vy < grid_size.y && vz < grid_size.z ) {
-
-        // The next (x_size) elements from here are the x coords
-		size_t base_grid_index = (grid_size.x+1) * (grid_size.y+1) * vz + (grid_size.x+1) * vy;
-        size_t base_voxel_index =  ((grid_size.x * grid_size.y) * vz ) + (grid_size.x * vy);
-
-        size_t voxel_index = base_voxel_index;
-		size_t grid_index = base_grid_index;
-        for ( int vx = 0; vx < grid_size.x; vx++ ) {
-			c000 = grid[grid_index + grid_size.x +1];
-			c001 = grid[grid_index];
-			c010 = grid[grid_index + grid_size.x +1 + layer_size];
-			c011 = grid[grid_index + layer_size];
-			c100 = grid[grid_index + grid_size.x +2];
-			c101 = grid[grid_index + 1];
-			c110 = grid[grid_index + grid_size.x + 2 + layer_size];
-			c111 = grid[grid_index + layer_size + 1];
-            
-			deformation[voxel_index] = trilinear(c000, c001,c010,c011,c100,c101,c110,c111);
-
-
-            voxel_index++;
-			grid_index++;
-        }
-    }
-}*/
-
 __host__
 TSDFVolume::TSDFVolume(int x, int y, int z, float3 ori, float3 size, int3 sg_scale){
 		max_threads = 512;
@@ -118,6 +66,10 @@ TSDFVolume::TSDFVolume(int x, int y, int z, float3 ori, float3 size, int3 sg_sca
 		m_size.x = x;
 		m_size.y = y;
 		m_size.z = z;
+
+		sg_size.x = (m_size.x - 1) / m_sg_scale.x + 1;
+		sg_size.y = (m_size.y - 1) / m_sg_scale.y + 1;
+		sg_size.z = (m_size.z - 1) / m_sg_scale.z + 1;
 
 		origin = ori;
 
@@ -167,10 +119,6 @@ void TSDFVolume::deallocate( ) {
         cudaFree( m_weights );
         m_weights = 0;
     }
-    /*if ( m_deform ) {
-        cudaFree( m_deform );
-        m_deform = 0;
-    }*/
     if ( grid_coord ) {
         cudaFree( grid_coord );
         grid_coord = 0;
@@ -186,7 +134,7 @@ __global__
 void Update_state(unsigned int * state, dim3 size){
 	int volume_idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (volume_idx < size.x * size.y * size.z && volume_idx >= 0){
-		if (state[volume_idx]==9) {state[volume_idx]=2;}
+		if (state[volume_idx]==2) {state[volume_idx]=2;}
 	}
 }
 
@@ -211,7 +159,7 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 		float pt_cam_y = cam2base[0 * 4 + 1] * tmp_pt[0] + cam2base[1 * 4 + 1] * tmp_pt[1] + cam2base[2 * 4 + 1] * tmp_pt[2];
 		float pt_cam_z = cam2base[0 * 4 + 2] * tmp_pt[0] + cam2base[1 * 4 + 2] * tmp_pt[1] + cam2base[2 * 4 + 2] * tmp_pt[2];
 
-		if (pt_cam_z <= 0.2f) //0
+		if (pt_cam_z <= 0.01f) //0
 			return;
 
 		int pt_pix_x = roundf(cam_K[0 * 3 + 0] * (pt_cam_x / pt_cam_z) + cam_K[0 * 3 + 2]);
@@ -296,7 +244,7 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 		float dist = fmin(1.0f, diff / trunc_margin); //fmin(diff, trunc_margin);
 		float weight_old = voxel_grid_weight[volume_idx];
 		float weight_new = weight_old + 1.0f;
-		if (weight_new < 90.0f) {
+		if (weight_new < 30.0f) { //max weight
 			voxel_grid_weight[volume_idx] = weight_new;
 		}
 		voxel_grid_TSDF[volume_idx] = (voxel_grid_TSDF[volume_idx] * weight_old + dist) / weight_new;
@@ -320,7 +268,7 @@ void TSDFVolume::Integrate(float* depth_map,float* cam_K, float* cam2base, bool 
 	cudaMemcpy(gpu_cam2base, cam2base, 4 * 4 * sizeof(float), cudaMemcpyHostToDevice);
 
 	int blocknum = ceil(m_size.x * m_size.y * m_size.z / (float)max_threads);
-	Integrate_kernal<<< blocknum,max_threads >>>(gpu_cam_K, gpu_cam2base, gpu_depth_im, m_size, origin, voxel_size, trunc_margin,m_distances, m_weights, grid_coord, m_state, check_start); //m_deform
+	Integrate_kernal<<< blocknum,max_threads >>>(gpu_cam_K, gpu_cam2base, gpu_depth_im, m_size, origin, voxel_size, trunc_margin,m_distances, m_weights, grid_coord, m_state, check_start); 
 	cudaDeviceSynchronize( );
 
 	Update_state<<< blocknum,max_threads >>>(m_state, m_size);
@@ -330,17 +278,15 @@ void TSDFVolume::Integrate(float* depth_map,float* cam_K, float* cam2base, bool 
 	cudaSafeCall(cudaFree(gpu_cam2base));
 	cudaSafeCall(cudaFree(gpu_depth_im));
 }
- 
+
+// initialize sparse subgrid
 __host__
 void TSDFVolume::InitSubGrid(std::vector<float3>& sg_pos, int3 sg_dims){
 	float3 * temp_grid = new float3[m_size.x * m_size.y * m_size.z];
 	cudaMemcpy(temp_grid, grid_coord, m_size.x * m_size.y * m_size.z * sizeof(float3), cudaMemcpyDeviceToHost);
 	int3 grid_scale = m_sg_scale;
 	int sg_index, volume_index;
-	//grid_scale.x = 15; //m_size.x / sg_dims.x;
-	//grid_scale.y = 15; //m_size.y / sg_dims.y;
-	//grid_scale.z = 20; //m_size.z / sg_dims.z;
-	//std::cout<<"test scale "<< grid_scale.x<<" "<<grid_scale.y<<" "<<grid_scale.z<<" "<<std::endl;
+
 	for (int i = 0; i < sg_dims.x; i++) {
 		for (int j = 0; j < sg_dims.y; j++) {
 			for (int k = 0; k < sg_dims.z; k++){	
@@ -355,11 +301,12 @@ void TSDFVolume::InitSubGrid(std::vector<float3>& sg_pos, int3 sg_dims){
 	delete temp_grid;
 }
 
-int index_3to1(int3 idx, int3 grid_dims)
+/*int index_3to1(int3 idx, int3 grid_dims)
 {
 	return idx.z * (grid_dims.y * grid_dims.x) + idx.y * grid_dims.x + idx.x;
-}
+}*/
 
+// upsampling sparse subgrid to update the whole grid
 __global__
 void upsample(float3 * grid_coor, float3 * sg_pos, int3 grid_scale, dim3 size, dim3 sg_size) {
 	int grid_index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -400,19 +347,11 @@ void upsample(float3 * grid_coor, float3 * sg_pos, int3 grid_scale, dim3 size, d
 }
 
 __host__
-void TSDFVolume::Upsample(std::vector<float3>& sg_pos, int3 sg_dims){
+void TSDFVolume::Upsample(std::vector<float3>& sg_pos){
 	// pass subgrid positions into gpu
 	float3 * sg_pos_gpu;
 	cudaSafeCall( cudaMalloc(&sg_pos_gpu, sg_pos.size() * sizeof(float3)) );
 	cudaSafeCall( cudaMemcpy(sg_pos_gpu, sg_pos.data(), sg_pos.size() * sizeof(float3), cudaMemcpyHostToDevice) );
-	
-	dim3 sg_size;
-	sg_size.x = sg_dims.x;
-	sg_size.y = sg_dims.y;
-	sg_size.z = sg_dims.z;
-
-	//int3 grid_scale = make_int3(15,15,20);
-	//std::cout<<"test scale "<< grid_scale.x<<" "<<grid_scale.y<<" "<<grid_scale.z<<" "<<std::endl;
 	
 	int blocknum = ceil(m_size.x*m_size.y*m_size.z / (float)max_threads);
 	upsample<<< blocknum, max_threads >>>(grid_coord, sg_pos_gpu, m_sg_scale, m_size, sg_size);

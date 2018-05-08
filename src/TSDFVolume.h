@@ -45,11 +45,12 @@ public:
 	}
 	
 	void InitSubGrid(std::vector<float3>& sg_pos, int3 sg_dims);
-	void Upsample(std::vector<float3>& sg_pos, int3 sg_dims);
+	void Upsample(std::vector<float3>& sg_pos);
 
 private:
 	float3 origin;
 	int3 m_sg_scale;
+	dim3 sg_size;
 	dim3 m_size;
 
 	float3 voxel_size;

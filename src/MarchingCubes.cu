@@ -179,9 +179,6 @@ void classify_voxel(const float * tsdf_dis, dim3 size,
                 	// voxel state
                 	unsigned int* state) {
 
-
-	// Extract the voxel X and Y coordinates which describe the position in the layers
-	// We use layer1 = z0, layer2 = z1
 	int idx_1d = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx_1d < size.x * size.y * size.z) {
 		int3 idx_3d = index_1dto3d(idx_1d, size);

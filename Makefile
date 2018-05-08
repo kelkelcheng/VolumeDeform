@@ -1,5 +1,5 @@
 EXECUTABLE = volume_deform.out
-OBJS = build/mLibSource.o build/main.o build/MarchingCubes.o build/TSDFVolume.o build/MC_table.o
+OBJS = build/mLibSource.o build/main.o build/MarchingCubes.o build/TSDFVolume.o build/MC_table.o build/CombinedSolver.o 
 
 UNAME := $(shell uname)
 ifeq ($(UNAME), Darwin)
