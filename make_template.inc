@@ -1,6 +1,6 @@
-CXX = clang++
-LINK = clang++
-NVCC = /usr/local/cuda-8.0/bin/nvcc 
+CXX = g++
+LINK = g++
+NVCC = /usr/local/cuda/bin/nvcc
 SRC ?= src
 CUDAHOME += /usr/local/cuda
 TERRAHOME ?= $(HOME)/Optlang/terra
