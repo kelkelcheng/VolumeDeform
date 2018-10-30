@@ -11,8 +11,8 @@ local Constraints       = Array("Constraints", opt_float3,{M},6)
 local ConstraintNormals = Array("ConstraintNormals", opt_float3,{M},7)
 local TriWeights	    = Array("TriWeights", opt_float3, {M}, 8)
 local G                 = Graph("G", 9, "w", {M}, 10, "v0", {M}, 11, "v1", {M}, 12, "v2", {M}, 13, 
-                                "v3", {M}, 14, "v4", {M}, 15, "v5", {M}, 16, "v6", {M}, 17, "v7", {M}, 18, "c", {M}, 19, "n", {M}, 20, "r", {M}, 21)
-local RegGrid           = Graph("RegGrid", 22, "v0", {M}, 23, "v1", {M}, 24)
+                                "v3", {M}, 14, "v4", {M}, 15, "v5", {M}, 16, "v6", {M}, 17, "v7", {M}, 18)
+local RegGrid           = Graph("RegGrid", 19, "v0", {M}, 20, "v1", {M}, 21)
 
 UsePreconditioner(true)
 
@@ -27,9 +27,9 @@ local pxx1 = (1.0 - TriWeights(G.w)[1])*px01 + TriWeights(G.w)[1]*px11
 
 local px = (1.0 - TriWeights(G.w)[2])*pxx0 + TriWeights(G.w)[2]*pxx1
 
-local e_fit = RobustWeights(G.r) * ConstraintNormals(G.n):dot(px - Constraints(G.c))
+local e_fit = RobustWeights(G.w) * ConstraintNormals(G.w):dot(px - Constraints(G.w))
 
-local validConstraint = greatereq(Constraints(G.c), -9999.9)
+local validConstraint = greatereq(Constraints(G.w), -9999.9)
 Energy(w_fitSqrt*Select(validConstraint, e_fit, 0.0))
 
 --RobustWeight Penalty

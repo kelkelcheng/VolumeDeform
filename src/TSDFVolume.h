@@ -7,7 +7,7 @@
 
 class TSDFVolume{
 public:
-	TSDFVolume(int x, int y, int z, float3 ori, float3 size, int3 sg_scale);
+	TSDFVolume(int x, int y, int z, float3 ori, float3 size, int3 sg_scale, int H, int W);
 
 	dim3 get_size(){
 		return m_size;
@@ -67,5 +67,8 @@ private:
 	unsigned int* m_state;
 
 	int max_threads;
+
+	int im_h;
+	int im_w;
 };
 #endif

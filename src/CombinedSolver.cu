@@ -116,7 +116,7 @@ void CombinedSolver::copyResultToCPUFromFloat3() {
 }
 
 // K * v
-__device__
+__host__ __device__
 void vecTrans(float3 &v, float K[9])
 {
 	float x = K[0] * v.x + K[1] * v.y + K[2] * v.z;
@@ -130,7 +130,7 @@ __global__
 void update_constraint(	float3 * d_vertices, float3 * d_normals, int3 * d_vol_idx, dim3 vol_size,
 						float * K_mat, float * K_inv_mat, int size, float * d_depth_mat, float3 * d_previousConstraints,
 						float3 * d_vertexPosTargetFloat3, float3 * d_vertexNormalTargetFloat3, float * d_robustWeights, unsigned int * grid_state,
-						float positionThreshold, float cosNormalThreshold, float3 invalidPt, int * num_update) {
+						float positionThreshold, float cosNormalThreshold, float3 invalidPt, int * num_update, int H, int im_w) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i < size) {
 		// get the associated point and normal
@@ -149,13 +149,13 @@ void update_constraint(	float3 * d_vertices, float3 * d_normals, int3 * d_vol_id
 		int p_y1 = floor(sourcePt.y / sourcePt.z);
 		int p_y2 = p_y1 + 1;
 
-		if (p_x1>=0 && p_x2<640-1 && p_y1>=0 && p_y2<480-1)
+		if (p_x1>=0 && p_x2<im_w-1 && p_y1>=0 && p_y2<H-1)
 		{
 			// find the depth of the 4 surrounding neighbours
-			float p_z11 = d_depth_mat[p_y1 * 640 + p_x1];
-			float p_z12 = d_depth_mat[p_y2 * 640 + p_x1];
-			float p_z21 = d_depth_mat[p_y1 * 640 + p_x2];
-			float p_z22 = d_depth_mat[p_y2 * 640 + p_x2];
+			float p_z11 = d_depth_mat[p_y1 * im_w + p_x1];
+			float p_z12 = d_depth_mat[p_y2 * im_w + p_x1];
+			float p_z21 = d_depth_mat[p_y1 * im_w + p_x2];
+			float p_z22 = d_depth_mat[p_y2 * im_w + p_x2];
 
 			if (p_z11>0.0f && p_z12 >0.0f && p_z21 >0.0f && p_z22 >0.0f) // safe guard
 			{
@@ -244,7 +244,7 @@ void update_constraint(	float3 * d_vertices, float3 * d_normals, int3 * d_vol_id
 // setting target point positions, normals, and robust weights	before optimization
 // will be called for each ICP iteration
 // many of the inputs here can be passed directly from MarchingCubes, make it a class later...
-__host__
+/*__host__
 int CombinedSolver::setConstraints(float positionThreshold, float cosNormalThreshold, float viewThreshold) //0.03 0.2 0.8
 {
 	dim3 vol_size = m_volume->get_size(); // used to locate grid_state
@@ -265,7 +265,7 @@ int CombinedSolver::setConstraints(float positionThreshold, float cosNormalThres
 	
 	cudaSafeCall( cudaMalloc(&d_K, 9 * sizeof(float)) ); // intrinsic matrix K
 	cudaSafeCall( cudaMalloc(&d_K_inv, 9 * sizeof(float)) ); // inverse of K
-	cudaSafeCall( cudaMalloc(&d_depth_mat, (640*480) * sizeof(float)) ); // depth image
+	cudaSafeCall( cudaMalloc(&d_depth_mat, (im_w*im_h) * sizeof(float)) ); // depth image
 	cudaSafeCall( cudaMalloc(&d_previousConstraints, M * sizeof(float3)) ); // previous target positions
 	
 	cudaSafeCall( cudaMalloc(&num_update, M * sizeof(int)) );	
@@ -276,13 +276,13 @@ int CombinedSolver::setConstraints(float positionThreshold, float cosNormalThres
 	cudaSafeCall( cudaMemcpy(d_normals, m_normals->data(), M * sizeof(float3), cudaMemcpyHostToDevice) );	
 	cudaSafeCall( cudaMemcpy(d_K, K_mat, 9 * sizeof(float), cudaMemcpyHostToDevice) );
 	cudaSafeCall( cudaMemcpy(d_K_inv, K_inv_mat, 9 * sizeof(float), cudaMemcpyHostToDevice) );
-	cudaSafeCall( cudaMemcpy(d_depth_mat, m_depth_mat, (640*480) * sizeof(float), cudaMemcpyHostToDevice) );
+	cudaSafeCall( cudaMemcpy(d_depth_mat, m_depth_mat, (im_w*im_h) * sizeof(float), cudaMemcpyHostToDevice) );
 	cudaSafeCall( cudaMemcpy(d_previousConstraints, m_previousConstraints.data(), M * sizeof(float3), cudaMemcpyHostToDevice) );	
 	
 	update_constraint<<< blocknum, max_threads >>>(	d_vertices, d_normals, d_voxel_idx, vol_size,
 						d_K, d_K_inv, M, d_depth_mat, d_previousConstraints,
 						(float3*) m_vertexPosTargetFloat3->data(), (float3*) m_vertexNormalTargetFloat3->data(), 
-						(float*) m_robustWeights->data(), m_volume->get_state(), positionThreshold, cosNormalThreshold, invalidPt, num_update); 
+						(float*) m_robustWeights->data(), m_volume->get_state(), positionThreshold, cosNormalThreshold, invalidPt, num_update, im_h, im_w); 
 	cudaSafeCall( cudaDeviceSynchronize() );
 
 	constraintsUpdated = thrust::count(thrust::device_ptr<int>(num_update), thrust::device_ptr<int>(num_update + M), 1);
@@ -299,15 +299,15 @@ int CombinedSolver::setConstraints(float positionThreshold, float cosNormalThres
 	cudaSafeCall( cudaFree(num_update) );
 	
     return constraintsUpdated;
-}
+}*/
 
 // CPU version of setConstraints
-/*__host__
+__host__
 int CombinedSolver::setConstraints(float positionThreshold = 0.03f, float cosNormalThreshold = 0.2f, float viewThreshold = 0.8f) //std::numeric_limits<float>::infinity() 0.03 0.2
 {
 	//test
 	dim3 vol_size = m_volume->get_size();
-	cudaMemcpy(grid_state.data(), m_volume->get_state(), vol_size.x * vol_size.y * vol_size.z * sizeof(unsigned int), cudaMemcpyDeviceToHost);
+	//cudaMemcpy(grid_state.data(), m_volume->get_state(), vol_size.x * vol_size.y * vol_size.z * sizeof(unsigned int), cudaMemcpyDeviceToHost);
 
 	//unsigned int M = (unsigned int)m_result.n_vertices();
 	unsigned int M = (unsigned int)(*m_vertices).size();
@@ -330,7 +330,7 @@ int CombinedSolver::setConstraints(float positionThreshold = 0.03f, float cosNor
 		float3 sourcePt = (*m_vertices)[i];
 		float3 sourceNormal = (*m_normals)[i];
 
-		vecTrans(sourcePt, mat_K);
+		vecTrans(sourcePt, K_mat);
 
 		bool validTargetFound = false;
 
@@ -341,7 +341,7 @@ int CombinedSolver::setConstraints(float positionThreshold = 0.03f, float cosNor
 		int p_y1 = floor(p_y);
 		int p_y2 = p_y1 + 1;
 
-		if (p_x1>=0 && p_x2<640-1 && p_y1>=0 && p_y2<480-1)
+		if (p_x1>=0 && p_x2<im_w-1 && p_y1>=0 && p_y2<im_h-1)
 		{
 			// find the depth of the 4 surrounding neighbours
 			//float p_z11 = (float)(depth_mat.at<unsigned short>(p_y1, p_x1)) / 1000.0f;
@@ -349,23 +349,23 @@ int CombinedSolver::setConstraints(float positionThreshold = 0.03f, float cosNor
 			//float p_z21 = (float)(depth_mat.at<unsigned short>(p_y1, p_x2)) / 1000.0f;
 			//float p_z22 = (float)(depth_mat.at<unsigned short>(p_y2, p_x2)) / 1000.0f;
 
-			float p_z11 = m_depth_mat[p_y1 * 640 + p_x1];
-			float p_z12 = m_depth_mat[p_y2 * 640 + p_x1];
-			float p_z21 = m_depth_mat[p_y1 * 640 + p_x2];
-			float p_z22 = m_depth_mat[p_y2 * 640 + p_x2];
+			float p_z11 = m_depth_mat[p_y1 * im_w + p_x1];
+			float p_z12 = m_depth_mat[p_y2 * im_w + p_x1];
+			float p_z21 = m_depth_mat[p_y1 * im_w + p_x2];
+			float p_z22 = m_depth_mat[p_y2 * im_w + p_x2];
 
 			if (p_z11>0.0f && p_z12 >0.0f && p_z21 >0.0f && p_z22 >0.0f) //p_z11 <=1.0f && p_z12 <=1.0f && p_z21 <=1.0f && p_z22 <=1.0f
 			{
 				// get target point position
 				float3 target = make_float3(p_x1*p_z11, p_y1*p_z11, p_z11);
-				vecTrans(target, mat_K_inv);
+				vecTrans(target, K_inv_mat);
 
 				// get tangent and bitanget as uVec and vVec
 				float3 uVec; float3 vVec;	
 				uVec.x = p_x2*p_z21-p_x1*p_z11; uVec.y = p_y1*p_z21-p_y1*p_z11; uVec.z = p_z21-p_z11;
 				vVec.x = p_x1*p_z12-p_x1*p_z11; vVec.y = p_y2*p_z12-p_y1*p_z11; vVec.z = p_z12-p_z11;
 		
-				vecTrans(uVec, mat_K_inv); vecTrans(vVec, mat_K_inv);
+				vecTrans(uVec, K_inv_mat); vecTrans(vVec, K_inv_mat);
 				
 				// calculate unit normal
 				float3 normVec = make_float3(uVec.y*vVec.z-uVec.z*vVec.y, uVec.z*vVec.x-uVec.x*vVec.z, uVec.x*vVec.y-uVec.y*vVec.x);
@@ -397,10 +397,10 @@ int CombinedSolver::setConstraints(float positionThreshold = 0.03f, float cosNor
 		                //check_updated = 1;
 		            }
 		            check_updated = 1;
-		            grid_state[idx1] = 2; // maybe using distance is good enough
+		            //grid_state[idx1] = 2; // maybe using distance is good enough
 				}
 				// disable the neighbors of the grid
-				if (!check_updated && grid_state[idx1]==2) {grid_state[idx1] = 0;}
+				//if (!check_updated && grid_state[idx1]==2) {grid_state[idx1] = 0;}
 			}
 		}
 		
@@ -440,7 +440,7 @@ int CombinedSolver::setConstraints(float positionThreshold = 0.03f, float cosNor
 	}
 
 	//test
-	cudaMemcpy(m_volume->get_state(), grid_state.data(), vol_size.x * vol_size.y * vol_size.z * sizeof(unsigned int), cudaMemcpyHostToDevice);
+	//cudaMemcpy(m_volume->get_state(), grid_state.data(), vol_size.x * vol_size.y * vol_size.z * sizeof(unsigned int), cudaMemcpyHostToDevice);
 
     m_vertexPosTargetFloat3->update(h_vertexPosTargetFloat3);
     m_vertexNormalTargetFloat3->update(h_vertexNormalTargetFloat3);
@@ -449,4 +449,4 @@ int CombinedSolver::setConstraints(float positionThreshold = 0.03f, float cosNor
     std::cout << "*******Thrown out correspondence count: " << thrownOutCorrespondenceCount << std::endl;
 
     return constraintsUpdated;
-}*/
+}

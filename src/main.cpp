@@ -112,22 +112,23 @@ int main(int argc, const char * argv[])
 	
 	// set up TSDF volume, its inputs are:
 	// volume(x_length, y_length, z_length, origin, voxel_size, subgrid_scale)
-	float3 voxel_size = make_float3(1.0f/361.0f, 1.0f/376.0f, 0.45f/61.0f); 	
-	TSDFVolume volume(361,376,61, make_float3(-0.5611f,-0.4208f, 0.6f), voxel_size, make_int3(15,15,20)); 
+	float3 voxel_size = make_float3(1.0f/361.0f, 1.0f/376.0f, 0.45f/61.0f); 
+	int im_width = 640; int im_height = 480;	
+	TSDFVolume volume(361,376,61, make_float3(-0.5611f,-0.4208f, 0.6f), voxel_size, make_int3(15,15,20), im_height, im_width); 
 	
 	// another set of parameters: a smaller grid
 	//float3 voxel_size = make_float3(0.6f/361.0f, 0.7f/376.0f, 0.45f/61.0f);
 	//TSDFVolume volume(361,376,61, make_float3(-0.36f,-0.26f, 0.6f), voxel_size, make_int3(15,15,20));
 
 	// set up intrinsic and extrinsic matrices
-	float mat_K[3 * 3] = {570.342, 0, 320,  0, 570.342, 240,  0, 0, 1};
-	float world2cam[4 * 4] = {1, 0, 0, 0, 0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1};
+	float K_mat[9] = {570.342, 0, 320,  0, 570.342, 240,  0, 0, 1};
+	float K_inv_mat[9] = {0.00175333, 0, -0.561066,  0, 0.00175333, -0.4208001,  0, 0, 1};
+	float world2cam[16] = {1, 0, 0, 0, 0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1};
 
 	// get the first depth frame and integrate
-	int im_width = 640; int im_height = 480;
 	float* depth_im = new float[im_height * im_width];
 	ReadDepth(sourceFilename, im_height, im_width, depth_im);
-	volume.Integrate(depth_im, mat_K, world2cam, 1);
+	volume.Integrate(depth_im, K_mat, world2cam, 1);
 	
 	// 3D positions of each mesh point
 	std::vector<float3> vertices;
@@ -156,7 +157,12 @@ int main(int argc, const char * argv[])
 	}
 
 	// initialize the solver (Opt)
-	CombinedSolver * solver =  new CombinedSolver(target_set, params, &volume, &vertices, &normals, &triangles, &vol_idx, &rel_coors);
+	CombinedSolver * solver =  new CombinedSolver(	target_set, params, 
+													&volume, 
+													&vertices, &normals, &triangles, 
+													&vol_idx, &rel_coors, 
+													K_mat, K_inv_mat,
+													im_height, im_width);
 
 	// record the processing time
     std::clock_t start;
@@ -193,7 +199,7 @@ int main(int argc, const char * argv[])
 		volume.Upsample(*(solver->get_grid()));
 
 		// integrate
-		volume.Integrate(depth_im, mat_K, world2cam, 0);
+		volume.Integrate(depth_im, K_mat, world2cam, 0);
 		
 		// parallel marching cube
 		vertices.clear(); triangles.clear(); normals.clear(); vol_idx.clear(); rel_coors.clear();

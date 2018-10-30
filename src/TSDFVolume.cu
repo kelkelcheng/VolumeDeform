@@ -58,8 +58,11 @@ void initialize_grid(float3 * grid, dim3 grid_size, float3 voxel_size, float3 gr
 }
 
 __host__
-TSDFVolume::TSDFVolume(int x, int y, int z, float3 ori, float3 size, int3 sg_scale){
+TSDFVolume::TSDFVolume(int x, int y, int z, float3 ori, float3 size, int3 sg_scale, int H, int W){
 		max_threads = 512;
+
+		im_h = H;
+		im_w = W;
 
 		m_sg_scale = sg_scale;
 		
@@ -141,7 +144,8 @@ void Update_state(unsigned int * state, dim3 size){
 __global__
 void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
                dim3 size, float3 origin, float3 voxel_size, float trunc_margin,
-               float * voxel_grid_TSDF, float * voxel_grid_weight, float3* grid_c, unsigned int* state, bool check_start) {
+               float * voxel_grid_TSDF, float * voxel_grid_weight, float3* grid_c, unsigned int* state, bool check_start,
+			   int H, int W, bool is_perspective=true) {
 
 	int volume_idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (volume_idx < size.x * size.y * size.z){
@@ -162,12 +166,21 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 		if (pt_cam_z <= 0.01f) //0
 			return;
 
-		int pt_pix_x = roundf(cam_K[0 * 3 + 0] * (pt_cam_x / pt_cam_z) + cam_K[0 * 3 + 2]);
-		int pt_pix_y = roundf(cam_K[1 * 3 + 1] * (pt_cam_y / pt_cam_z) + cam_K[1 * 3 + 2]);
-		if (pt_pix_x < 0 || pt_pix_x >= 640 || pt_pix_y < 0 || pt_pix_y >= 480)
+		//TODO: add orthographic projection
+		int pt_pix_x, pt_pix_y;
+		if (is_perspective) {
+			pt_pix_x = roundf(cam_K[0 * 3 + 0] * (pt_cam_x / pt_cam_z) + cam_K[0 * 3 + 2]);
+			pt_pix_y = roundf(cam_K[1 * 3 + 1] * (pt_cam_y / pt_cam_z) + cam_K[1 * 3 + 2]);
+		}
+		else {
+			pt_pix_x = roundf(cam_K[0 * 3 + 0] * pt_cam_x + cam_K[0 * 3 + 2]);
+			pt_pix_y = roundf(cam_K[1 * 3 + 1] * pt_cam_y + cam_K[1 * 3 + 2]);
+		}
+
+		if (pt_pix_x < 0 || pt_pix_x >= W || pt_pix_y < 0 || pt_pix_y >= H)
 			return;
 
-		float depth_val = depth_im[pt_pix_y * 640 + pt_pix_x];
+		float depth_val = depth_im[pt_pix_y * W + pt_pix_x];
 
 		if (depth_val <= 0 || depth_val > 1) //0, 6
 			return;
@@ -258,8 +271,8 @@ void TSDFVolume::Integrate(float* depth_map,float* cam_K, float* cam2base, bool 
 	float * gpu_cam2base;
 	float * gpu_depth_im;
 
-	cudaMalloc(&gpu_depth_im, 480 * 640 * sizeof(float));
-	cudaMemcpy(gpu_depth_im, depth_map, 480 * 640 * sizeof(float), cudaMemcpyHostToDevice);
+	cudaMalloc(&gpu_depth_im, im_h * im_w * sizeof(float));
+	cudaMemcpy(gpu_depth_im, depth_map, im_h * im_w * sizeof(float), cudaMemcpyHostToDevice);
 
 	cudaMalloc(&gpu_cam_K, 3 * 3 * sizeof(float));
 	cudaMemcpy(gpu_cam_K, cam_K, 3 * 3 * sizeof(float), cudaMemcpyHostToDevice);
@@ -268,7 +281,7 @@ void TSDFVolume::Integrate(float* depth_map,float* cam_K, float* cam2base, bool 
 	cudaMemcpy(gpu_cam2base, cam2base, 4 * 4 * sizeof(float), cudaMemcpyHostToDevice);
 
 	int blocknum = ceil(m_size.x * m_size.y * m_size.z / (float)max_threads);
-	Integrate_kernal<<< blocknum,max_threads >>>(gpu_cam_K, gpu_cam2base, gpu_depth_im, m_size, origin, voxel_size, trunc_margin,m_distances, m_weights, grid_coord, m_state, check_start); 
+	Integrate_kernal<<< blocknum,max_threads >>>(gpu_cam_K, gpu_cam2base, gpu_depth_im, m_size, origin, voxel_size, trunc_margin,m_distances, m_weights, grid_coord, m_state, check_start, im_h, im_w); 
 	cudaDeviceSynchronize( );
 
 	Update_state<<< blocknum,max_threads >>>(m_state, m_size);

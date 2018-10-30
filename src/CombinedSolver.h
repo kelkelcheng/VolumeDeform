@@ -32,10 +32,26 @@ class CombinedSolver : public CombinedSolverBase
 {
 
 	public:
-        CombinedSolver(const std::vector<std::string> targetFiles, CombinedSolverParameters params, TSDFVolume* volume, std::vector<float3>* vertices, std::vector<float3>* normals, std::vector<int3>* triangles, std::vector<int3>* vol_idx, std::vector<float3>* rel_coors)
+        CombinedSolver(	const std::vector<std::string> targetFiles, 
+						CombinedSolverParameters params, 
+						TSDFVolume* volume, 
+						std::vector<float3>* vertices, 
+						std::vector<float3>* normals, 
+						std::vector<int3>* triangles, 
+						std::vector<int3>* vol_idx, 
+						std::vector<float3>* rel_coors, 
+						float K[9], float K_inv[9],
+						int H, int W
+					)
 		{
             m_combinedSolverParameters = params;
 			m_targets = targetFiles;
+
+            memcpy(K_mat, K, 9*sizeof(float));
+            memcpy(K_inv_mat, K_inv, 9*sizeof(float));     
+
+			im_h = H;
+			im_w = W;
 
 			m_volume = volume;
 			m_vertices = vertices;
@@ -74,20 +90,21 @@ class CombinedSolver : public CombinedSolverBase
 			std::vector<unsigned int> dims_grid = { (uint)m_nNodes };
 
 			// initialize Opt optimizer variables
-            m_vertexPosTargetFloat3     = createEmptyOptImage(dims, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
-			m_vertexNormalTargetFloat3  = createEmptyOptImage(dims, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
-            m_robustWeights             = createEmptyOptImage(dims, OptImage::Type::FLOAT, 1, OptImage::Location::GPU, true);
-            m_gridPosFloat3             = createEmptyOptImage(dims_grid, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
-            m_gridPosFloat3Urshape      = createEmptyOptImage(dims_grid, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
+			m_gridPosFloat3             = createEmptyOptImage(dims_grid, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
             m_anglesFloat3              = createEmptyOptImage(dims_grid, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
+			m_robustWeights             = createEmptyOptImage(dims, OptImage::Type::FLOAT, 1, OptImage::Location::GPU, true);
+			m_gridPosFloat3Urshape      = createEmptyOptImage(dims_grid, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
+			m_vertexPosTargetFloat3     = createEmptyOptImage(dims, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
+			m_vertexNormalTargetFloat3  = createEmptyOptImage(dims, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);          
 			m_triWeights              	= createEmptyOptImage(dims, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
 
 			// initialize graph variables in Opt
 			initializeWarpGrid();		
 			//grid_state.resize(vol_size.x * vol_size.y * vol_size.z);
 
-			addOptSolvers(dims, "opt_rotation.t", m_combinedSolverParameters.optDoublePrecision);
-            addOptSolvers(dims, "opt_position.t", m_combinedSolverParameters.optDoublePrecision);
+			addOptSolvers(dims, "opt_formulation.t", m_combinedSolverParameters.optDoublePrecision);
+			//addOptSolvers(dims, "opt_rotation.t", m_combinedSolverParameters.optDoublePrecision);
+            //addOptSolvers(dims, "opt_position.t", m_combinedSolverParameters.optDoublePrecision);
 		} 
 
         virtual void combinedSolveInit() override {
@@ -133,7 +150,8 @@ class CombinedSolver : public CombinedSolverBase
 
             for (m_targetIndex = 0; m_targetIndex < m_targets.size(); ++m_targetIndex) {
                 if (m_targetIndex!=0) resetGPUMemory();
-				singleSolve(m_solverInfo[0], m_solverInfo[1]); 
+				//singleSolve(m_solverInfo[0], m_solverInfo[1]); 
+				singleSolve(m_solverInfo[0]); 
             }
 
             combinedSolveFinalize();
@@ -147,46 +165,22 @@ preSingleSolve();
 		s1.solver->solve // position
 		postNonlinearSolve(i);
 **/ 			
-		virtual void singleSolve(SolverInfo s0, SolverInfo s1) {
+		virtual void singleSolve(SolverInfo s0) {
 		    preSingleSolve();
-		    if (m_combinedSolverParameters.numIter == 1) {
-		        preNonlinearSolve(0);
-				std::cout << "------------ Position ------------" << std::endl;
-				s1.solver->solve(m_solverParams, m_problemParams, m_combinedSolverParameters.profileSolve, s1.iterationInfo);
-		        postNonlinearSolve(0);
-		        
-		        preNonlinearSolve(0);
-		        std::cout << "------------ Rotation ------------" << std::endl;
-		        s0.solver->solve(m_solverParams, m_problemParams, m_combinedSolverParameters.profileSolve, s0.iterationInfo);
-				//postNonlinearSolve(0);
-				//std::cout << "------------ Position ------------" << std::endl;
-				s1.solver->solve(m_solverParams, m_problemParams, m_combinedSolverParameters.profileSolve, s1.iterationInfo);
-		        postNonlinearSolve(0);
-		    }
+		
+			for (int i = 0; i < (int)m_combinedSolverParameters.numIter; ++i) {
+				std::cout << "//////////// ITERATION" << i << "  (" << s0.name << ") ///////////////" << std::endl;
+				std::cout << "------------ Optimization ------------" << std::endl;
+				preNonlinearSolve(i);
+				s0.solver->solve(m_solverParams, m_problemParams, m_combinedSolverParameters.profileSolve, s0.iterationInfo);
+				postNonlinearSolve(i);
 
-		    else {
-				std::cout << "------------ Position ------------" << std::endl;
-	            preNonlinearSolve(0);
-				s1.solver->solve(m_solverParams, m_problemParams, m_combinedSolverParameters.profileSolve, s1.iterationInfo);
-	            postNonlinearSolve(0);
-
-		        for (int i = 0; i < (int)m_combinedSolverParameters.numIter; ++i) {
-		            std::cout << "//////////// ITERATION" << i << "  (" << s0.name << ") ///////////////" << std::endl;
-		            //s.solver->solve(m_solverParams, m_problemParams, m_combinedSolverParameters.profileSolve, s.iterationInfo);
-				    std::cout << "------------ Rotation ------------" << std::endl;
-		            preNonlinearSolve(i);
-				    s0.solver->solve(m_solverParams, m_problemParams, m_combinedSolverParameters.profileSolve, s0.iterationInfo);
-
-					std::cout << "------------ Position ------------" << std::endl;
-					s1.solver->solve(m_solverParams, m_problemParams, m_combinedSolverParameters.profileSolve, s1.iterationInfo);
-		            postNonlinearSolve(i);
-
-		            if (m_combinedSolverParameters.earlyOut || m_endSolveEarly) {
-		                m_endSolveEarly = false;
-		                break;
-		            }
-		        }
-		    }
+				if (m_combinedSolverParameters.earlyOut || m_endSolveEarly) {
+					m_endSolveEarly = false;
+					break;
+				}
+			}
+		
 		    postSingleSolve();
 		}
 
@@ -236,13 +230,13 @@ preSingleSolve();
         }
 
 		void update_depth() {
-			int H = 480; 
-			int W = 640;
+			//int H = 480; 
+			//int W = 640;
 			cv::Mat depth_mat = cv::imread(m_targets[0], CV_LOAD_IMAGE_UNCHANGED); //m_targetIndex
 			std::cout << "read depth: " << m_targets[0] << std::endl; //m_targetIndex
-			for (int r = 0; r < H; ++r)
-				for (int c = 0; c < W; ++c) {
-					m_depth_mat[r * W + c] = (float)(depth_mat.at<unsigned short>(r, c)) / 1000.0f;
+			for (int r = 0; r < im_h; ++r)
+				for (int c = 0; c < im_w; ++c) {
+					m_depth_mat[r * im_w + c] = (float)(depth_mat.at<unsigned short>(r, c)) / 1000.0f;
 			}
 		}
 
@@ -389,7 +383,7 @@ preSingleSolve();
 			}
 
 			m_triWeights->update(m_relativeCoords);
-			m_graph = std::make_shared<OptGraph>(std::vector<std::vector<int> >({ w, v1, v2, v3, v4, v5, v6, v7, v8, w, w, w}));
+			m_graph = std::make_shared<OptGraph>(std::vector<std::vector<int> >({ w, v1, v2, v3, v4, v5, v6, v7, v8}));
 		}
 
 		std::vector<float3>* get_grid()
@@ -550,7 +544,9 @@ preSingleSolve();
 		std::vector<int3>* m_vol_idx;
 		std::vector<float3>* m_rel_coors;
 		//std::vector<unsigned int> grid_state; // only used in CPU version
-	
+		int im_h;
+		int im_w;
+
 		int3 m_scale;
 			
 		//float3 m_min;
@@ -570,12 +566,15 @@ preSingleSolve();
         // Current index in solve
         uint m_targetIndex;
 
-		std::shared_ptr<OptImage> m_anglesFloat3;
-		std::shared_ptr<OptImage> m_vertexPosTargetFloat3;
-		std::shared_ptr<OptImage> m_vertexNormalTargetFloat3;
+        float m_fitSqrt;
+        float m_regSqrt;
+
 		std::shared_ptr<OptImage> m_gridPosFloat3; 
+		std::shared_ptr<OptImage> m_anglesFloat3;
+		std::shared_ptr<OptImage> m_robustWeights;
 		std::shared_ptr<OptImage> m_gridPosFloat3Urshape;
-        std::shared_ptr<OptImage> m_robustWeights;
+		std::shared_ptr<OptImage> m_vertexPosTargetFloat3;
+		std::shared_ptr<OptImage> m_vertexNormalTargetFloat3;		        
 		std::shared_ptr<OptImage> m_triWeights;
 		std::shared_ptr<OptGraph> m_graph;
 		std::shared_ptr<OptGraph> m_regGrid;	
@@ -586,30 +585,14 @@ preSingleSolve();
         float m_weightRegFactor;
         float m_weightReg;
         float m_functionTolerance;
-        float m_fitSqrt;
-        float m_regSqrt;
+
 
 		int max_threads = 512;
 
 		float * m_depth_mat;
 
-		/*float mat_K[4][4] =
-		{
-			{570.342, 0, 320, 0},
-			{0, 570.342, 240, 0},
-			{0, 0, 1, 0},
-			{0, 0, 0, 1}
-		};
-
-		float mat_K_inv[4][4] =
-		{
-			{0.00175333, 0, -0.561066, 0}, //
-			{0, 0.00175333, -0.4208001, 0},
-			{0, 0, 1, 0},
-			{0, 0, 0, 1}
-		};*/
-		float K_mat[3 * 3] = {570.342, 0, 320,  0, 570.342, 240,  0, 0, 1};
-		float K_inv_mat[3 * 3] = {0.00175333, 0, -0.561066,  0, 0.00175333, -0.4208001,  0, 0, 1};
+		float K_mat[9];  //[3 * 3] = {570.342, 0, 320,  0, 570.342, 240,  0, 0, 1};
+		float K_inv_mat[9];  //[3 * 3] = {0.00175333, 0, -0.561066,  0, 0.00175333, -0.4208001,  0, 0, 1};
 		std::vector<float3> h_gridVertexPosFloat3;
 };
 #endif
