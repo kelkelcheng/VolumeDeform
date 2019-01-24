@@ -12,10 +12,44 @@
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
 
+#include <math.h>
+
+void write_pt_cloud( const std::string& file_name_out, const std::string& file_name, int H, int W) {
+  cv::Mat depth_mat = cv::imread(file_name, CV_LOAD_IMAGE_UNCHANGED);
+  if (depth_mat.empty()) {
+    std::cout << "Error: depth image file not read!" << std::endl;
+    cv::waitKey(0);
+  }  
+  float z_max = 0;
+  float z_min = 3;
+	std::ofstream f ;
+	f.open(file_name_out);
+	if( f.is_open() ) {
+    for (int r = 0; r < H; ++r) {
+      for (int c = 0; c < W; ++c) {
+        float z = (float)(depth_mat.at<unsigned short>(r, c)) / 1000.0f - 10.0f;
+        if (z>0.0f && z<1.5f) {f << "v " << c/float(W)*2 << " " << r/float(H)*2 << " " << z << std::endl;}
+        z_max = std::max(z_max, z);
+        if (z>0.0) z_min = std::min(z_min, z);
+        /*//if (z>0.0) std::cout << "depth value: " << z << std::endl;
+        if (depth[r * W + c] > 1.5f) { // Only consider depth < 1m
+          depth[r * W + c] = 0;
+          count++;
+        }*/
+      }
+    }
+    std::cout << "point cloud: max: " << z_max << " min: " << z_min << std::endl;    
+	} else {
+		std::cout << "Problem opening file for write " << file_name_out << std::endl;
+	}
+	f.close();
+}
+
 void write_to_ply( const std::string& file_name, const std::vector<float3>& vertices, const std::vector<int3>& triangles ) {
 	std::ofstream f ;
 	f.open(file_name);
 	if( f.is_open() ) {
+    /*
 		f << "ply" << std::endl;
 		f << "format ascii 1.0" << std::endl;
 
@@ -26,25 +60,102 @@ void write_to_ply( const std::string& file_name, const std::vector<float3>& vert
 
 		f << "element face " << triangles.size() << std::endl;
 		f << "property list uchar int vertex_indices" << std::endl;
-		f << "end_header" << std::endl;
+		f << "end_header" << std::endl;*/
 
 		std::vector<bool> v_include;
 		for ( int v = 0; v < vertices.size(); v++ ) {
 			if (vertices[v].x > 2.0f || vertices[v].x < -2.0f || vertices[v].y > 2.0f || vertices[v].y < -2.0f || vertices[v].z > 2.0f || vertices[v].z < -2.0f) {
-				f << 0.0f << " " << 0.0f << " " << 0.75f << std::endl;
+				//f << 0.0f << " " << 0.0f << " " << 0.75f << std::endl;
+        f << "v " << 0.0f << " " << 0.0f << " " << 0.75f << std::endl;
 				v_include.push_back(0);
 			} else {
-				f << vertices[v].x << " " << vertices[v].y << " " << vertices[v].z << std::endl;	
+				//f << vertices[v].x << " " << vertices[v].y << " " << vertices[v].z << std::endl;
+        f << "v " << vertices[v].x << " " << vertices[v].y << " " << vertices[v].z << std::endl;	
 				v_include.push_back(1);
 			}
 		}
 		for ( int t = 0; t < triangles.size(); t++ ) {
 			if (v_include[t]) {
-				f << "3 " << triangles[t].x << " " << triangles[t].y << " " << triangles[t].z << std::endl;
+				//f << "3 " << triangles[t].x << " " << triangles[t].y << " " << triangles[t].z << std::endl;
+        f << "f " << triangles[t].x+1 << " " << triangles[t].y+1 << " " << triangles[t].z+1 << std::endl;
 			}
 		}
 	} else {
 		std::cout << "Problem opening file for write " << file_name << std::endl;
+	}
+	f.close();
+}
+
+float3 mat_mul_vec(float3 v, float K[9])
+{
+  float x = K[0] * v.x + K[1] * v.y + K[2] * v.z;
+  float y = K[3] * v.x + K[4] * v.y + K[5] * v.z;
+  float z = K[6] * v.x + K[7] * v.y + K[8] * v.z;
+  return make_float3(x, y ,z);
+}
+
+void write_mesh( const std::string& file_name_out, const std::string& file_name, int H, int W, float K_inv_mat[9]) {
+  cv::Mat depth_mat = cv::imread(file_name, CV_LOAD_IMAGE_UNCHANGED);
+  if (depth_mat.empty()) {
+    std::cout << "Error: depth image file not read!" << std::endl;
+    cv::waitKey(0);
+  }
+
+  float z_max = 0;
+  float z_min = 10;
+  int count = 0;
+  float threshold = 0.1;
+
+	std::ofstream f;
+	f.open(file_name_out);
+
+	if( f.is_open() ) {
+    for (int r = 0; r < H; ++r) {
+      for (int c = 0; c < W; ++c) {
+        float z = (float)(depth_mat.at<unsigned short>(r, c)) / 2500.0f;
+        //if (z==0.0) z=3.0;
+
+        //f << "v " << (r)/float(H)*2.0f << " " << (c)/float(W)*2.0f << " " << z << std::endl;
+        float3 v = make_float3((float)c*z, (float)r*z, z);
+        v = mat_mul_vec(v, K_inv_mat);
+        f << "v " << v.y << " " << v.x << " " << v.z << std::endl; 
+
+        //if (count<700) {std::cout << "r*H+c: " << r*H+c <<std::endl;count++;}
+        z_max = std::max(z_max, v.z);
+        if (v.z>0.0) z_min = std::min(z_min, v.z);
+      }
+    }
+    
+    for (int r = 0; r < H-2; ++r) {
+      for (int c = 0; c < W-2; ++c) {
+        if( r<2 || c<2) continue;
+
+        float z0 = (float)(depth_mat.at<unsigned short>(r-1, c-1)) / 2500.0f;
+        float z1 = (float)(depth_mat.at<unsigned short>(r-1, c  )) / 2500.0f;
+        float z2 = (float)(depth_mat.at<unsigned short>(r-1, c+1)) / 2500.0f;
+        float z3 = (float)(depth_mat.at<unsigned short>(r  , c-1)) / 2500.0f;
+        float z4 = (float)(depth_mat.at<unsigned short>(r  , c  )) / 2500.0f;
+        float z5 = (float)(depth_mat.at<unsigned short>(r  , c+1)) / 2500.0f;
+        float z6 = (float)(depth_mat.at<unsigned short>(r+1, c-1)) / 2500.0f;
+        float z7 = (float)(depth_mat.at<unsigned short>(r+1, c  )) / 2500.0f;
+        float z8 = (float)(depth_mat.at<unsigned short>(r+1, c+1)) / 2500.0f;
+
+        float dy_u_max = std::max({fabs(z0 - z3), fabs(z1 - z4), fabs(z2 - z5)});
+        float dy_d_max = std::max({fabs(z0 - z6), fabs(z1 - z7), fabs(z2 - z8)});
+        float dx_l_max = std::max({fabs(z0 - z1), fabs(z3 - z4), fabs(z6 - z7)});
+        float dx_r_max = std::max({fabs(z0 - z2), fabs(z3 - z5), fabs(z6 - z8)});
+
+        if (((dy_u_max<threshold) && (dy_d_max<threshold)) && ((dx_l_max<threshold) && (dx_r_max<threshold))) {
+          if (z0>0 && z1>0 && z2>0 && z3>0 && z4>0 && z5>0 && z6>0 && z7>0 && z8>0){
+              f << "f " << r*W+c+1 << " " << r*W+c+2 << " " << (r+1)*W+c+1 << std::endl;
+              f << "f " << (r+1)*W+c+2 << " " << (r+1)*W+c+1 << " " << r*W+c+2 << std::endl;
+          }
+        }
+      } 
+    }
+    std::cout << "mesh: max: " << z_max << " min: " << z_min << std::endl;    
+	} else {
+		std::cout << "Problem opening file for write " << file_name_out << std::endl;
 	}
 	f.close();
 }
@@ -72,12 +183,28 @@ void ReadDepth(std::string filename, int H, int W, float * depth) {
     std::cout << "Error: depth image file not read!" << std::endl;
     cv::waitKey(0);
   }
-  for (int r = 0; r < H; ++r)
+  int count = 0;
+  float z_max = 0;
+  float z_min = 3;
+  for (int r = 0; r < H; ++r) {
     for (int c = 0; c < W; ++c) {
-      depth[r * W + c] = (float)(depth_mat.at<unsigned short>(r, c)) / 1000.0f;
-      if (depth[r * W + c] > 1.0f) // Only consider depth < 1m
+      float z = (float)(depth_mat.at<unsigned short>(r, c)) / 2500.0f;// - 1.7;
+      //float z = (float)(depth_mat.at<unsigned short>(r, c)) / 10000.0f;
+      //float z = (float)(depth_mat.at<unsigned short>(r, c)) / 1000.0f * 1.1f - 11.0f;
+      //if (z!=0) z += 0.45; //0.3 0.45
+
+      depth[r * W + c] = z;
+      z_max = std::max(z_max, z);
+      if (z>0.0) z_min = std::min(z_min, z);
+      //if (z>0.0) std::cout << "depth value: " << z << std::endl;
+      if (depth[r * W + c] > 1.5f) { // Only consider depth < 1m
         depth[r * W + c] = 0;
+        count++;
+      }
     }
+  }
+  std::cout << "max: " << z_max << " min: " << z_min << std::endl;
+  std::cout << "number of discard depth values: " << count << std::endl;
 }
 
 // 4x4 matrix multiplication (matrices are stored as float arrays in row-major order)

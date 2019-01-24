@@ -58,11 +58,12 @@ void initialize_grid(float3 * grid, dim3 grid_size, float3 voxel_size, float3 gr
 }
 
 __host__
-TSDFVolume::TSDFVolume(int x, int y, int z, float3 ori, float3 size, int3 sg_scale, int H, int W){
+TSDFVolume::TSDFVolume(int x, int y, int z, float3 ori, float3 size, int3 sg_scale, int H, int W, bool is_perspective){
 		max_threads = 512;
 
 		im_h = H;
 		im_w = W;
+		m_is_perspective = is_perspective;
 
 		m_sg_scale = sg_scale;
 		
@@ -77,7 +78,7 @@ TSDFVolume::TSDFVolume(int x, int y, int z, float3 ori, float3 size, int3 sg_sca
 		origin = ori;
 
 		voxel_size = size;
-		trunc_margin = voxel_size.x * 5; //5;
+		trunc_margin = voxel_size.x * 5;//0.2;// * 5; //5;
 
 		int xyz = x*y*z;
 		size_t data_size = xyz * sizeof( float );
@@ -95,6 +96,10 @@ TSDFVolume::TSDFVolume(int x, int y, int z, float3 ori, float3 size, int3 sg_sca
  
 		cudaSafeCall(cudaMalloc(&grid_coord, xyz * sizeof(float3)));
 		initialize_grid<<< ceil(xyz / (float)max_threads), max_threads >>>(grid_coord, m_size, voxel_size, origin);
+		cudaDeviceSynchronize( );
+
+		cudaSafeCall(cudaMalloc(&grid_coord_ori, xyz * sizeof(float3)));
+		initialize_grid<<< ceil(xyz / (float)max_threads), max_threads >>>(grid_coord_ori, m_size, voxel_size, origin);
 		cudaDeviceSynchronize( );
 
 		cudaSafeCall(cudaMalloc(&m_state, xyz * sizeof(unsigned int)));
@@ -126,7 +131,10 @@ void TSDFVolume::deallocate( ) {
         cudaFree( grid_coord );
         grid_coord = 0;
     }
-
+    if ( grid_coord_ori ) {
+        cudaFree( grid_coord_ori );
+        grid_coord_ori = 0;
+    }
 	if ( m_state ) {
 		cudaFree(m_state);
 		m_state = 0;
@@ -137,7 +145,7 @@ __global__
 void Update_state(unsigned int * state, dim3 size){
 	int volume_idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (volume_idx < size.x * size.y * size.z && volume_idx >= 0){
-		if (state[volume_idx]==2) {state[volume_idx]=2;}
+		if (state[volume_idx]==3) {state[volume_idx]=2;}
 	}
 }
 
@@ -154,6 +162,8 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 		float pt_base_y = grid_c[volume_idx].y;
 		float pt_base_z = grid_c[volume_idx].z;
 
+		//if (volume_idx < 10) {printf("hello0 volume idx: %d, x: %f, y: %f, z_2: %f \n", volume_idx, pt_base_x, pt_base_y, pt_base_z);}
+
 		// Convert from base frame camera coordinates to current frame camera coordinates
 		float tmp_pt[3] = {0};
 		tmp_pt[0] = pt_base_x - cam2base[0 * 4 + 3];
@@ -162,6 +172,8 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 		float pt_cam_x = cam2base[0 * 4 + 0] * tmp_pt[0] + cam2base[1 * 4 + 0] * tmp_pt[1] + cam2base[2 * 4 + 0] * tmp_pt[2];
 		float pt_cam_y = cam2base[0 * 4 + 1] * tmp_pt[0] + cam2base[1 * 4 + 1] * tmp_pt[1] + cam2base[2 * 4 + 1] * tmp_pt[2];
 		float pt_cam_z = cam2base[0 * 4 + 2] * tmp_pt[0] + cam2base[1 * 4 + 2] * tmp_pt[1] + cam2base[2 * 4 + 2] * tmp_pt[2];
+
+		//if (volume_idx < 10) {printf("hello1 volume idx: %d, x: %f, y: %f, z_2: %f \n", volume_idx, pt_cam_x, pt_cam_y, pt_cam_z);}
 
 		if (pt_cam_z <= 0.01f) //0
 			return;
@@ -177,13 +189,21 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 			pt_pix_y = roundf(cam_K[1 * 3 + 1] * pt_cam_y + cam_K[1 * 3 + 2]);
 		}
 
+		//if (volume_idx < 10) {printf("hello2 volume idx: %d, x: %d, y: %d, z_2: %f \n", volume_idx, pt_pix_x, pt_pix_y, pt_cam_z);}
+
 		if (pt_pix_x < 0 || pt_pix_x >= W || pt_pix_y < 0 || pt_pix_y >= H)
 			return;
+		
+		//if (volume_idx > 750000 && volume_idx < 800000) {printf("hello2 volume idx: %d, x: %d, y: %d, z_2: %f \n", volume_idx, pt_pix_x, pt_pix_y, pt_cam_z);}
+		//if (volume_idx < 10) {printf("hello2 volume idx: %d, x: %d, y: %d, z_2: %f \n", volume_idx, pt_pix_x, pt_pix_y, pt_cam_z);}
 
 		float depth_val = depth_im[pt_pix_y * W + pt_pix_x];
 
-		if (depth_val <= 0 || depth_val > 1) //0, 6
+		if (depth_val <= 0 || depth_val > 1.2) //0, 6
 			return;
+
+		//if (volume_idx < 1000000) {printf("hello3 volume idx: %d, x: %d, y: %d, z: %f, dep: %f \n", volume_idx, pt_pix_x, pt_pix_y, pt_cam_z, depth_val);}
+		//if (volume_idx < 10) {printf("hello3 volume idx: %d, x: %d, y: %d, z: %f, dep: %f \n", volume_idx, pt_pix_x, pt_pix_y, pt_cam_z, depth_val);}
 
 		float diff = depth_val - pt_cam_z;
 
@@ -194,9 +214,16 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 		}*/
 		diff = fmax(diff, -trunc_margin); // new
 		
+		//if (volume_idx < 10) {printf("hello3 volume idx: %d, x: %d, y: %d, z: %d, z_2: %d \n", volume_idx, pt_pix_x, pt_pix_y, depth_val, pt_cam_z);}
 		
 		// update one-ring only
 		if ( voxel_grid_TSDF[volume_idx] >= 90.0f )	{ //90.0f
+
+			//TODO !! remove later... use to disable adding new grid points
+			if (!check_start) {
+				return;
+			}		
+
 			int3 v_idx3 = index_1to3(volume_idx, size);
 			bool check_iso = 0;
 			//int num_grid = size.x * size.y * size.z;
@@ -235,8 +262,9 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 				if (state[volume_idx] == 0) {												 				
 					state[volume_idx] = 3;//1;
 				} else {				
-					dist = (voxel_grid_TSDF[volume_idx] * voxel_grid_weight[volume_idx] + dist) / (voxel_grid_weight[volume_idx] + 1.0f);
-					state[volume_idx] += 1;
+					//dist = (voxel_grid_TSDF[volume_idx] * voxel_grid_weight[volume_idx] + dist) / (voxel_grid_weight[volume_idx] + 1.0f);
+					//state[volume_idx] += 1;
+					state[volume_idx] = 3;
 				}
 				voxel_grid_weight[volume_idx] += 1.0f;
 				voxel_grid_TSDF[volume_idx] = dist;
@@ -261,7 +289,7 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 			voxel_grid_weight[volume_idx] = weight_new;
 		}
 		voxel_grid_TSDF[volume_idx] = (voxel_grid_TSDF[volume_idx] * weight_old + dist) / weight_new;
-		state[volume_idx] = 2; //0
+		state[volume_idx] = 3; //0 to enable integration control, 2 to disregard, use 3
 	}
 }
 
@@ -281,7 +309,7 @@ void TSDFVolume::Integrate(float* depth_map,float* cam_K, float* cam2base, bool 
 	cudaMemcpy(gpu_cam2base, cam2base, 4 * 4 * sizeof(float), cudaMemcpyHostToDevice);
 
 	int blocknum = ceil(m_size.x * m_size.y * m_size.z / (float)max_threads);
-	Integrate_kernal<<< blocknum,max_threads >>>(gpu_cam_K, gpu_cam2base, gpu_depth_im, m_size, origin, voxel_size, trunc_margin,m_distances, m_weights, grid_coord, m_state, check_start, im_h, im_w); 
+	Integrate_kernal<<< blocknum,max_threads >>>(gpu_cam_K, gpu_cam2base, gpu_depth_im, m_size, origin, voxel_size, trunc_margin,m_distances, m_weights, grid_coord, m_state, check_start, im_h, im_w, m_is_perspective); 
 	cudaDeviceSynchronize( );
 
 	Update_state<<< blocknum,max_threads >>>(m_state, m_size);

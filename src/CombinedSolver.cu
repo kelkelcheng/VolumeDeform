@@ -116,7 +116,7 @@ void CombinedSolver::copyResultToCPUFromFloat3() {
 }
 
 // K * v
-__host__ __device__
+__device__
 void vecTrans(float3 &v, float K[9])
 {
 	float x = K[0] * v.x + K[1] * v.y + K[2] * v.z;
@@ -244,7 +244,7 @@ void update_constraint(	float3 * d_vertices, float3 * d_normals, int3 * d_vol_id
 // setting target point positions, normals, and robust weights	before optimization
 // will be called for each ICP iteration
 // many of the inputs here can be passed directly from MarchingCubes, make it a class later...
-/*__host__
+__host__
 int CombinedSolver::setConstraints(float positionThreshold, float cosNormalThreshold, float viewThreshold) //0.03 0.2 0.8
 {
 	dim3 vol_size = m_volume->get_size(); // used to locate grid_state
@@ -299,15 +299,68 @@ int CombinedSolver::setConstraints(float positionThreshold, float cosNormalThres
 	cudaSafeCall( cudaFree(num_update) );
 	
     return constraintsUpdated;
-}*/
+}
 
 // CPU version of setConstraints
+// calculate normal from depth image
 __host__
+std::tuple<float3, bool> CombinedSolver::findNormal(float3 p, float* im, bool isPerspective = true, bool isWorldCoord = true) 
+{
+	if (isWorldCoord) {
+		vecTrans(p, K_mat);
+	}
+	float p_x, p_y;
+	if (isPerspective) {
+		p_x = p.x / p.z;
+		p_y = p.y / p.z;
+	}
+	else {
+		p_x = p.x;
+		p_y = p.y;
+	}
+	int p_x1 = floor(p_x); 
+	int p_x2 = p_x1 + 1; 
+	int p_y1 = floor(p_y);
+	int p_y2 = p_y1 + 1;
+	
+	if (p_x1>=0 && p_x2<=im_w-1 && p_y1>=0 && p_y2<=im_h-1) {
+		float p_z11 = im[p_y1 * im_w + p_x1];
+		float p_z12 = im[p_y2 * im_w + p_x1];
+		float p_z21 = im[p_y1 * im_w + p_x2];
+		float p_z22 = im[p_y2 * im_w + p_x2];	
+		
+		if (p_z11>0.0f && p_z12>0.0f && p_z21>0.0f && p_z22>0.0f) {
+			float3 uVec; float3 vVec;
+			
+			if (isPerspective) {
+				uVec.x = p_x2*p_z21-p_x1*p_z11; uVec.y = p_y1*p_z21-p_y1*p_z11; uVec.z = p_z21-p_z11;
+				vVec.x = p_x1*p_z12-p_x1*p_z11; vVec.y = p_y2*p_z12-p_y1*p_z11; vVec.z = p_z12-p_z11;												
+			}
+			else {
+				uVec.x = p_x2-p_x1; uVec.y = p_y1-p_y1; uVec.z = p_z21-p_z11;
+				vVec.x = p_x1-p_x1; vVec.y = p_y2-p_y1; vVec.z = p_z12-p_z11;						
+			}					
+			vecTrans(uVec, K_inv_mat); vecTrans(vVec, K_inv_mat);
+			
+			float3 normVec = make_float3(uVec.y*vVec.z-uVec.z*vVec.y, uVec.z*vVec.x-uVec.x*vVec.z, uVec.x*vVec.y-uVec.y*vVec.x);
+			normVec = normalize(normVec);
+			
+			if (normVec.z > 0) {
+				normVec.x = -normVec.x; normVec.y = -normVec.y; normVec.z = -normVec.z; 
+			}
+			
+			return std::make_tuple(normVec, true);	 				
+		}								
+	}												
+	return std::make_tuple(make_float3(0,0,0), false);				
+}
+
+/*__host__
 int CombinedSolver::setConstraints(float positionThreshold = 0.03f, float cosNormalThreshold = 0.2f, float viewThreshold = 0.8f) //std::numeric_limits<float>::infinity() 0.03 0.2
 {
 	//test
 	dim3 vol_size = m_volume->get_size();
-	//cudaMemcpy(grid_state.data(), m_volume->get_state(), vol_size.x * vol_size.y * vol_size.z * sizeof(unsigned int), cudaMemcpyDeviceToHost);
+	cudaSafeCall(cudaMemcpy(grid_state.data(), m_volume->get_state(), vol_size.x * vol_size.y * vol_size.z * sizeof(unsigned int), cudaMemcpyDeviceToHost));
 
 	//unsigned int M = (unsigned int)m_result.n_vertices();
 	unsigned int M = (unsigned int)(*m_vertices).size();
@@ -326,6 +379,9 @@ int CombinedSolver::setConstraints(float positionThreshold = 0.03f, float cosNor
 	//int testCount = 0;
 
     for (int i = 0; i < (int)M; i++) {
+		std::vector<size_t> neighbors(MAX_K);
+		std::vector<float> out_dist_sqr(MAX_K);
+
 		float3 currentPt = (*m_vertices)[i];
 		float3 sourcePt = (*m_vertices)[i];
 		float3 sourceNormal = (*m_normals)[i];
@@ -334,75 +390,42 @@ int CombinedSolver::setConstraints(float positionThreshold = 0.03f, float cosNor
 
 		bool validTargetFound = false;
 
-		float p_x = sourcePt.x / sourcePt.z; // edit -- sourcePt.x
-		float p_y = sourcePt.y / sourcePt.z; //
-		int p_x1 = floor(p_x); 
-		int p_x2 = p_x1 + 1; 
-		int p_y1 = floor(p_y);
-		int p_y2 = p_y1 + 1;
+		const float kdPt[3] = {currentPt.x, currentPt.y, currentPt.z};
+		m_targetAccelerationStructure->knnSearch(kdPt, MAX_K, &neighbors[0], &out_dist_sqr[0]);
 
-		if (p_x1>=0 && p_x2<im_w-1 && p_y1>=0 && p_y2<im_h-1)
-		{
-			// find the depth of the 4 surrounding neighbours
-			//float p_z11 = (float)(depth_mat.at<unsigned short>(p_y1, p_x1)) / 1000.0f;
-			//float p_z12 = (float)(depth_mat.at<unsigned short>(p_y2, p_x1)) / 1000.0f;
-			//float p_z21 = (float)(depth_mat.at<unsigned short>(p_y1, p_x2)) / 1000.0f;
-			//float p_z22 = (float)(depth_mat.at<unsigned short>(p_y2, p_x2)) / 1000.0f;
+		// update if it is under threshold
+		// get corresponding volume index (inside TSDFVolume)
+		// m_volume->get_origin() is wrong!	           
+		int3 idx3 = (*m_vol_idx)[i];
+		int idx1 = idx3.z * (vol_size.y * vol_size.x) + idx3.y * vol_size.x + idx3.x;
+		bool check_updated = 0;
 
-			float p_z11 = m_depth_mat[p_y1 * im_w + p_x1];
-			float p_z12 = m_depth_mat[p_y2 * im_w + p_x1];
-			float p_z21 = m_depth_mat[p_y1 * im_w + p_x2];
-			float p_z22 = m_depth_mat[p_y2 * im_w + p_x2];
-
-			if (p_z11>0.0f && p_z12 >0.0f && p_z21 >0.0f && p_z22 >0.0f) //p_z11 <=1.0f && p_z12 <=1.0f && p_z21 <=1.0f && p_z22 <=1.0f
-			{
-				// get target point position
-				float3 target = make_float3(p_x1*p_z11, p_y1*p_z11, p_z11);
-				vecTrans(target, K_inv_mat);
-
-				// get tangent and bitanget as uVec and vVec
-				float3 uVec; float3 vVec;	
-				uVec.x = p_x2*p_z21-p_x1*p_z11; uVec.y = p_y1*p_z21-p_y1*p_z11; uVec.z = p_z21-p_z11;
-				vVec.x = p_x1*p_z12-p_x1*p_z11; vVec.y = p_y2*p_z12-p_y1*p_z11; vVec.z = p_z12-p_z11;
-		
-				vecTrans(uVec, K_inv_mat); vecTrans(vVec, K_inv_mat);
-				
-				// calculate unit normal
-				float3 normVec = make_float3(uVec.y*vVec.z-uVec.z*vVec.y, uVec.z*vVec.x-uVec.x*vVec.z, uVec.x*vVec.y-uVec.y*vVec.x);
-				normVec = normalize(normVec);
-
-				// get the distance between the source point and the target point
-				float3 distVec = target - currentPt;
-				float dist = length(distVec);
-
-				// get the correct normal direction
-				if (normVec.z > 0) {
-					normVec.x = -normVec.x; normVec.y = -normVec.y; normVec.z = -normVec.z; 
-				}
-				// update if it is under threshold
-				// get corresponding volume index (inside TSDFVolume)
-				// m_volume->get_origin() is wrong!	           
-                int3 idx3 = (*m_vol_idx)[i];
-                int idx1 = idx3.z * (vol_size.y * vol_size.x) + idx3.y * vol_size.x + idx3.x;
-				bool check_updated = 0;
-				
-                if (dist < positionThreshold) {
-		            if (dot(normVec, sourceNormal) > cosNormalThreshold) {
-						h_vertexPosTargetFloat3[i] = target;
-						h_vertexNormalTargetFloat3[i] = normVec;
-		                validTargetFound = true;
-		                
-		                // set grid to be integratable
-		                //grid_state[idx1] = 2;
-		                //check_updated = 1;
-		            }
-		            check_updated = 1;
-		            //grid_state[idx1] = 2; // maybe using distance is good enough
-				}
-				// disable the neighbors of the grid
-				//if (!check_updated && grid_state[idx1]==2) {grid_state[idx1] = 0;}
+		for (size_t indexOfNearest : neighbors) {				            			            
+			float3 target = m_vertices_2[(int)indexOfNearest];
+			
+			std::tuple<float3, bool> normalFlag2 = findNormal(target, m_depth_mat, m_is_perspective);
+			if (!std::get<1>(normalFlag2)) {break;}
+			float3 normVec = std::get<0>(normalFlag2);
+																
+			float3 distVec = target - currentPt;
+			float dist = length(distVec);
+			
+			// from deform_api, check if this will cause error
+			if (dist > positionThreshold) {
+				break;
 			}
+
+			if (dot(normVec, sourceNormal) > cosNormalThreshold) {
+				h_vertexPosTargetFloat3[i] = target;//make_float3(target[0], target[1], target[2]);
+				h_vertexNormalTargetFloat3[i] = normVec;//targetNormal;
+				validTargetFound = true;
+				check_updated = 1;
+				grid_state[idx1] = 2; // maybe using distance is good enough
+				break;
+			}			        
 		}
+		// disable the neighbors of the grid
+		if (!check_updated && grid_state[idx1]==2) {grid_state[idx1] = 0;} //!check_updated && grid_state[idx1]==2
 		
 		// set the target to negative infinity if unbounded
         if (!validTargetFound) {
@@ -440,7 +463,7 @@ int CombinedSolver::setConstraints(float positionThreshold = 0.03f, float cosNor
 	}
 
 	//test
-	//cudaMemcpy(m_volume->get_state(), grid_state.data(), vol_size.x * vol_size.y * vol_size.z * sizeof(unsigned int), cudaMemcpyHostToDevice);
+	cudaSafeCall(cudaMemcpy(m_volume->get_state(), grid_state.data(), vol_size.x * vol_size.y * vol_size.z * sizeof(unsigned int), cudaMemcpyHostToDevice));
 
     m_vertexPosTargetFloat3->update(h_vertexPosTargetFloat3);
     m_vertexNormalTargetFloat3->update(h_vertexNormalTargetFloat3);
@@ -449,4 +472,4 @@ int CombinedSolver::setConstraints(float positionThreshold = 0.03f, float cosNor
     std::cout << "*******Thrown out correspondence count: " << thrownOutCorrespondenceCount << std::endl;
 
     return constraintsUpdated;
-}
+}*/

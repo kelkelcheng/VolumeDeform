@@ -1,6 +1,7 @@
 #ifndef CombinedSolver_h
 #define CombinedSolver_h
 
+#include <nanoflann/include/nanoflann.hpp>
 #include "mLibInclude.h"
 
 #include <cuda_runtime.h>
@@ -20,9 +21,53 @@
 #include "MarchingCubes.h"
 
 #include <assert.h> 
-//#include "cudaUtil.h"
+
+#include "cudaUtil.h"
 // just for testing purpose
 //extern "C" void initAngle(void* ptr_angles, unsigned int m_nNodes);
+
+using namespace nanoflann;
+// For nanoflann computation
+struct PointCloud_nanoflann {
+    std::vector<float3>  pts;
+
+    // Must return the number of data points
+    inline size_t kdtree_get_point_count() const { return pts.size(); }
+
+    // Returns the distance between the vector "p1[0:size-1]" and the data point with index "idx_p2" stored in the class:
+    inline float kdtree_distance(const float *p1, const size_t idx_p2, size_t /*size*/) const
+    {
+        const float d0 = p1[0] - pts[idx_p2].x;
+        const float d1 = p1[1] - pts[idx_p2].y;
+        const float d2 = p1[2] - pts[idx_p2].z;
+        return d0*d0 + d1*d1 + d2*d2;
+    }
+
+    // Returns the dim'th component of the idx'th point in the class:
+    // Since this is inlined and the "dim" argument is typically an immediate value, the
+    //  "if/else's" are actually solved at compile time.
+    inline float kdtree_get_pt(const size_t idx, int dim) const
+    {
+        if (dim == 0) return pts[idx].x;
+        else if (dim == 1) return pts[idx].y;
+        else return pts[idx].z;
+    }
+
+    // Optional bounding-box computation: return false to default to a standard bbox computation loop.
+    //   Return true if the BBOX was already computed by the class and returned in "bb" so it can be avoided to redo it again.
+    //   Look at bb.size() to find out the expected dimensionality (e.g. 2 or 3 for point clouds)
+    template <class BBOX>
+    bool kdtree_get_bbox(BBOX& /* bb */) const { return false; }
+
+};
+
+
+typedef KDTreeSingleIndexAdaptor<
+    L2_Simple_Adaptor<float, PointCloud_nanoflann>,
+    PointCloud_nanoflann,
+    3 /* dim */
+> NanoKDTree;
+#define MAX_K 20
 
 static float clamp(float v, float mn, float mx) {
     return std::max(mn,std::min(v, mx));
@@ -41,7 +86,8 @@ class CombinedSolver : public CombinedSolverBase
 						std::vector<int3>* vol_idx, 
 						std::vector<float3>* rel_coors, 
 						float K[9], float K_inv[9],
-						int H, int W
+						int H, int W,
+						bool is_perspective=true
 					)
 		{
             m_combinedSolverParameters = params;
@@ -52,6 +98,7 @@ class CombinedSolver : public CombinedSolverBase
 
 			im_h = H;
 			im_w = W;
+			m_is_perspective = is_perspective;
 
 			m_volume = volume;
 			m_vertices = vertices;
@@ -100,7 +147,7 @@ class CombinedSolver : public CombinedSolverBase
 
 			// initialize graph variables in Opt
 			initializeWarpGrid();		
-			//grid_state.resize(vol_size.x * vol_size.y * vol_size.z);
+			grid_state.resize(vol_size.x * vol_size.y * vol_size.z);
 
 			addOptSolvers(dims, "opt_formulation.t", m_combinedSolverParameters.optDoublePrecision);
 			//addOptSolvers(dims, "opt_rotation.t", m_combinedSolverParameters.optDoublePrecision);
@@ -109,9 +156,9 @@ class CombinedSolver : public CombinedSolverBase
 
         virtual void combinedSolveInit() override {
             m_weightFit = 10.0f; 
-            m_weightRegMax = 16.0f; //16 64
+            m_weightRegMax = 32.0f; //16 64
             
-            m_weightRegMin = 10.0f; //10 32
+            m_weightRegMin = 16.0f; //10 32
             m_weightRegFactor = 0.9f; //0.95f
 
             m_weightReg = m_weightRegMax;
@@ -186,6 +233,8 @@ preSingleSolve();
 
         virtual void preSingleSolve() override {
             unsigned int M = (unsigned int)(*m_vertices).size();//m_initial.n_vertices();
+			m_targetAccelerationStructure = generateAccelerationStructure(&m_vertices_2);
+
             m_previousConstraints.resize(M);
             for (int i = 0; i < (int)M; ++i) {
                 m_previousConstraints[i] = make_float3(0, 0, -90901283092183);
@@ -234,10 +283,235 @@ preSingleSolve();
 			//int W = 640;
 			cv::Mat depth_mat = cv::imread(m_targets[0], CV_LOAD_IMAGE_UNCHANGED); //m_targetIndex
 			std::cout << "read depth: " << m_targets[0] << std::endl; //m_targetIndex
-			for (int r = 0; r < im_h; ++r)
+			m_vertices_2.clear();
+			
+			int count = 0; //TODO remove later
+			for (int r = 0; r < im_h; ++r) {
 				for (int c = 0; c < im_w; ++c) {
-					m_depth_mat[r * im_w + c] = (float)(depth_mat.at<unsigned short>(r, c)) / 1000.0f;
+					float z = (float)(depth_mat.at<unsigned short>(r, c)) / 2500.0f;// - 1.7;
+					//float z = (float)(depth_mat.at<unsigned short>(r, c)) / 10000.0f;
+					//float z = (float)(depth_mat.at<unsigned short>(r, c)) / 1000.0f * 1.1f - 11.0f;
+
+					//if (count <= 50) {std::cout << "z: " << z << std::endl; count++;} //TODO remove later
+
+					//if (z!=0) z += 0.45; //0.3  0.45
+					m_depth_mat[r * im_w + c] = z;
+
+					if (z >= 0.0 && z < 1.2) { //1.2
+						float3 v;
+						if (m_is_perspective) {
+							v = make_float3(c*z, r*z, z);
+						}
+						else {
+							v = make_float3(c, r, z);
+						}
+						vecTrans(v, K_inv_mat);
+						m_vertices_2.push_back(v);
+					}  
+				}	
 			}
+		}
+
+
+		float edgeFunction(const float3 &a, const float3 &b, const float3 &c) { 
+			return (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x); 
+		} 
+
+		void create_depthmap() {
+
+			vector<float3>& vertices = *m_vertices;
+			//float* zbuffer = new float[im_h * im_w];
+			std::vector<float> zbuffer(im_h * im_w, 0);
+			for (int i = 0; i < im_h * im_w; ++i) {
+				zbuffer[i] = 0.0;
+			}
+
+			vector<int3>& triangles = *m_triangles;
+			for (int i = 0; i < triangles.size(); i++) {
+				int3 tri_idx = triangles[i];
+				float3 v0 = vertices[tri_idx.x];
+				float3 v1 = vertices[tri_idx.y];
+				float3 v2 = vertices[tri_idx.z];
+
+				vecTrans(v0, K_mat);
+				vecTrans(v1, K_mat);
+				vecTrans(v2, K_mat);
+
+				float x0 = v0.x / v0.z;
+				float x1 = v1.x / v1.z;
+				float x2 = v2.x / v2.z;
+
+				float y0 = v0.y / v0.z;
+				float y1 = v1.y / v1.z;
+				float y2 = v2.y / v2.z;
+
+				int x_min = (int) std::floor(std::min({x0, x1, x2}));
+				int x_max = (int) std::ceil(std::max({x0, x1, x2}));
+
+				int y_min = (int) std::floor(std::min({y0, y1, y2}));
+				int y_max = (int) std::ceil(std::max({y0, y1, y2}));
+
+				x_min = std::max(0, std::min(im_w - 1, x_min));
+				y_min = std::max(0, std::min(im_h - 1, y_min));
+				x_max = std::max(0, std::min(im_w - 1, x_max));
+				y_max = std::max(0, std::min(im_h - 1, y_max));
+
+				float3 proj_v0 = make_float3(x0, y0, 1);
+				float3 proj_v1 = make_float3(x1, y1, 1);
+				float3 proj_v2 = make_float3(x2, y2, 1);
+
+				float area = edgeFunction(proj_v0, proj_v1, proj_v2);
+
+				for (int r = y_min; r <= y_max; ++r) {
+					for (int c = x_min; c <= x_max; ++c) {
+						//float z; 
+						int idx = r*im_w+c;
+
+						float3 proj_v = make_float3(c, r, 1);
+						float w0 = edgeFunction(proj_v1, proj_v2, proj_v);
+						float w1 = edgeFunction(proj_v2, proj_v0, proj_v);
+						float w2 = edgeFunction(proj_v0, proj_v1, proj_v);
+						if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+							w0 /= area;
+							w1 /= area;
+							w2 /= area;
+							float z = 1.0 / (w0 * (1.0 / v0.z) + w1 * (1.0 / v1.z) + w2 * (1.0 / v2.z));
+							if (z < zbuffer[idx] || zbuffer[idx]==0) {
+								zbuffer[idx] = z;							
+							}
+						}
+					}
+				}
+			}
+			
+			//int count = 0; //TODO remove later
+			/*
+			for (int r = 0; r < im_h; ++r) {
+				for (int c = 0; c < im_w; ++c) {
+					temp_mat[r*im_w+c] = make_float3(0.0, 0.0, 0.0);
+					float shortest = 100.0;
+
+					for (int i=0; i<vertices.size(); i++){
+						float3 v = vertices[i];
+						vecTrans(v, K_mat);
+
+						float x = v.x / v.z;
+						float y = v.y / v.z;
+
+						//int x = (int) round(v.x / v.z);
+						//int y = (int) round(v.y / v.z);
+
+						if (std::abs(x-c)<1.001 && std::abs(y-r)<1.001) {
+							float dis = length(make_float2((float)c, (float)r) - make_float2(x, y));
+							if (dis < shortest) {
+								shortest = dis;
+								temp_mat[r*im_w+c] = v; // vertices[i];
+							}
+						}
+						//if (y<im_h && x<im_w) {temp_mat[y*im_w+x] = vertices[i];}				
+					}
+				}  
+			}
+			*/
+			/*
+			for (int r = 0; r < im_h; ++r) {
+				for (int c = 0; c < im_w; ++c) {
+					temp_mat[r*im_w+c] = make_float3(0.0, 0.0, 0.0);
+				}  
+			}
+
+			for (int i=0; i<vertices.size(); i++){
+				float3 v = vertices[i];
+				vecTrans(v, K_mat);
+				int x = (int) round(v.x / v.z);
+				int y = (int) round(v.y / v.z);
+				if (y<im_h && x<im_w) {temp_mat[y*im_w+x] = vertices[i];}				
+			}*/
+
+			int H = im_h;
+			int W = im_w;
+			std::ofstream f ;
+			f.open("../output_mesh/after_integration_depthmap.obj");
+			int count = 0;
+			float threshold = 0.1;
+			if( f.is_open() ) {
+				for (int r = 0; r < H; ++r) {
+					for (int c = 0; c < W; ++c) {
+						/*float3 vv = temp_mat[r*W+c];
+						vv.x = (float)c * vv.z;
+						vv.y = (float)r * vv.z;*/
+						float v_z = zbuffer[r*W+c];
+						float3 vv = make_float3((float)c * v_z, (float)r * v_z, v_z);
+						vecTrans(vv, K_inv_mat);
+						f << "v " << vv.y << " " << vv.x << " " << vv.z << std::endl;
+					}
+				}
+				
+				/*for (int i = 0; i < H-1; ++i) {
+					for (int j = 0; j < W-1; ++j) {
+						if (temp_mat[i*W+j].z > 0.0f) {
+							f << "f " << i*W+j+1 << " " << i*W+j+2 << " " << (i+1)*W+j+1 << std::endl;
+							f << "f " << (i+1)*W+(j+1)+1 << " " << (i+1)*W+j+1 << " " << i*W+j+1+1 << std::endl;
+						}
+					}
+				}*/
+
+				
+				for (int r = 0; r < H-2; ++r) {
+					for (int c = 0; c < W-2; ++c) {
+						if( r<2 || c<2) continue;
+
+						float z0 = zbuffer[(r-1)*W+c-1];
+						float z1 = zbuffer[(r-1)*W+c];
+						float z2 = zbuffer[(r-1)*W+c+1];
+						float z3 = zbuffer[(r)*W+c-1];
+						float z4 = zbuffer[(r)*W+c];
+						float z5 = zbuffer[(r)*W+c+1];
+						float z6 = zbuffer[(r+1)*W+c-1];
+						float z7 = zbuffer[(r+1)*W+c];
+						float z8 = zbuffer[(r+1)*W+c+1];
+
+						//if (count<100 && z4>0) {std::cout << z0 <<" "<<z1<<" "<<z2<<" "<<z3<<" "<<z4<<std::endl;count++;}
+
+						float dy_u_max = std::max({fabs(z0 - z3), fabs(z1 - z4), fabs(z2 - z5)});
+						float dy_d_max = std::max({fabs(z0 - z6), fabs(z1 - z7), fabs(z2 - z8)});
+						float dx_l_max = std::max({fabs(z0 - z1), fabs(z3 - z4), fabs(z6 - z7)});
+						float dx_r_max = std::max({fabs(z0 - z2), fabs(z3 - z5), fabs(z6 - z8)});
+					
+						//if (count<100 && z4>0) {std::cout << z0 - z3 <<" "<<dy_d_max<<" "<<dx_l_max<<" "<<dx_r_max<<std::endl;count++;}
+
+						//f << "f " << r*H+c+1 << " " << r*H+c+1+1 << " " << (r+1)*H+c+1 << std::endl;
+
+						
+						if (((dy_u_max<threshold) && (dy_d_max<threshold)) && ((dx_l_max<threshold) && (dx_r_max<threshold))) {
+							//if (z0>0 && z1>0 && z2>0 && z3>0 && z4>0 && z5>0 && z6>0 && z7>0 && z8>0){
+							if (z4>0 && z5>0 && z7>0){
+								f << "f " << r*W+c+1 << " " << r*W+c+2 << " " << (r+1)*W+c+1 << std::endl;
+								//f << "f " << (r+1)*W+(c+1)+1 << " " << (r+1)*W+c+1 << " " << r*W+c+1+1 << std::endl;
+							}
+							if (z5>0 && z7>0 && z8>0){
+								//f << "f " << r*W+c+1 << " " << r*W+c+2 << " " << (r+1)*W+c+1 << std::endl;
+								f << "f " << (r+1)*W+(c+1)+1 << " " << (r+1)*W+c+1 << " " << r*W+c+1+1 << std::endl;
+							}										
+						}
+						
+					}
+				}
+
+				// create depth map as png
+				/*std::vector<float> depth_map_vec(im_h * im_w, 0);
+				for (int i = 0; i < im_h * im_w; ++i) {
+					depth_map_vec[i] = zbuffer[i] * 2500.0;
+				}*/
+				//cv::Mat depth_map = cv::Mat(depth_map_vec).reshape(0, im_h);
+				cv::Mat depth_map = cv::Mat(zbuffer).reshape(0, im_h);
+				depth_map *= 2500.0;
+				//memcpy(depth_map.data, zbuffer);
+				depth_map.convertTo( depth_map, CV_16UC1 );
+				cv::imwrite( "../output_mesh/after_integration_depthmap.png", depth_map );
+				//delete zbuffer;
+			}
+			f.close();	
 		}
 
 		int getIndex1D(int3 idx)
@@ -245,6 +519,13 @@ preSingleSolve();
 			return idx.z * (m_gridDims.y * m_gridDims.x) + idx.y * m_gridDims.x + idx.x;
 		}
 
+		void vecTrans(float3 &v, float K[9])
+		{
+			float x = K[0] * v.x + K[1] * v.y + K[2] * v.z;
+			float y = K[3] * v.x + K[4] * v.y + K[5] * v.z;
+			float z = K[6] * v.x + K[7] * v.y + K[8] * v.z;
+			v.x = x; v.y = y; v.z = z;
+		}
 		/*void vecTrans(float3 &v, float K[4][4])
 		{
 			float x = K[0][0] * v.x + K[0][1] * v.y + K[0][2] * v.z + K[0][3];
@@ -253,6 +534,7 @@ preSingleSolve();
 			v.x = x; v.y = y; v.z = z;
 		}*/
 		
+		std::tuple<float3, bool> findNormal(float3 p, float* im, bool isPerspective, bool isWorldCoord);
         int setConstraints(float positionThreshold, float cosNormalThreshold, float viewThreshold); //0.03 0.2 0.8
 
 		/*void computeBoundingBox()
@@ -535,17 +817,37 @@ preSingleSolve();
 		}
 
 	private:
+        std::unique_ptr<NanoKDTree> generateAccelerationStructure(std::vector<float3>* vertices) {
+			int M = (*vertices).size();
+			
+            //assert(m_spuriousIndices.size() == m_noisyOffsets.size());
+            m_pointCloud.pts.resize(M);
+            for (unsigned int i = 0; i < M; i++)
+            {   
+                float3 p = (*vertices)[i];
+                m_pointCloud.pts[i] = {p.x, p.y, p.z};
+            }
+            std::unique_ptr<NanoKDTree> tree = std::unique_ptr<NanoKDTree>(new NanoKDTree(3 /*dim*/, m_pointCloud, KDTreeSingleIndexAdaptorParams(10 /* max leaf */)));
+            tree->buildIndex();
+            return tree;
+        }
+
+		PointCloud_nanoflann m_pointCloud;
+        std::unique_ptr<NanoKDTree> m_targetAccelerationStructure;
+
 		unsigned int m_nNodes; //number of grid points
         unsigned int m_M; //number of mesh points
 		TSDFVolume* m_volume;
 		std::vector<float3>* m_vertices;
+		std::vector<float3> m_vertices_2;
 		std::vector<float3>* m_normals;
 		std::vector<int3>* m_triangles;
 		std::vector<int3>* m_vol_idx;
 		std::vector<float3>* m_rel_coors;
-		//std::vector<unsigned int> grid_state; // only used in CPU version
+		std::vector<unsigned int> grid_state; // only used in CPU version
 		int im_h;
 		int im_w;
+		bool m_is_perspective;
 
 		int3 m_scale;
 			

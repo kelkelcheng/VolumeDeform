@@ -112,22 +112,39 @@ int main(int argc, const char * argv[])
 	
 	// set up TSDF volume, its inputs are:
 	// volume(x_length, y_length, z_length, origin, voxel_size, subgrid_scale)
-	float3 voxel_size = make_float3(1.0f/361.0f, 1.0f/376.0f, 0.45f/61.0f); 
-	int im_width = 640; int im_height = 480;	
-	TSDFVolume volume(361,376,61, make_float3(-0.5611f,-0.4208f, 0.6f), voxel_size, make_int3(15,15,20), im_height, im_width); 
+	float3 voxel_size = make_float3(1.0f/361.0f, 1.0f/376.0f, 0.3f/61.0f); 
+	//float3 voxel_size = make_float3(2.0f/361.0f, 2.0f/376.0f, 0.6f/61.0f); 
+
+	int im_width = 640; int im_height = 480;
+	//int im_width = 256; int im_height = 256;		
+	bool is_perspective = true;
+
+	TSDFVolume volume(361,376,61, make_float3(-0.5611f,-0.4208f, 0.7f), voxel_size, make_int3(15,15,20), im_height, im_width, is_perspective); 
+	//TSDFVolume volume(361,376,61, make_float3(0.01f,0.01f, 0.30f), voxel_size, make_int3(15,15,20), im_height, im_width, is_perspective); 
 	
 	// another set of parameters: a smaller grid
 	//float3 voxel_size = make_float3(0.6f/361.0f, 0.7f/376.0f, 0.45f/61.0f);
 	//TSDFVolume volume(361,376,61, make_float3(-0.36f,-0.26f, 0.6f), voxel_size, make_int3(15,15,20));
 
 	// set up intrinsic and extrinsic matrices
-	float K_mat[9] = {570.342, 0, 320,  0, 570.342, 240,  0, 0, 1};
-	float K_inv_mat[9] = {0.00175333, 0, -0.561066,  0, 0.00175333, -0.4208001,  0, 0, 1};
+	//float K_mat[9] = {570.342, 0, 320,  0, 570.342, 240,  0, 0, 1};
+	//float K_inv_mat[9] = {0.00175333, 0, -0.561066,  0, 0.00175333, -0.4208001,  0, 0, 1};
+
+	//float K_mat[3 * 3] = {(float)(im_width-1)/2.0f, 0, 0,  0, (float)(im_height-1)/2.0f, 0,  0, 0, 1};
+	//float K_inv_mat[3 * 3] = {2.0f/(im_width-1), 0, 0,  0, 2.0f/(float)(im_height-1), 0,  0, 0, 1};
+
+	float K_mat[3 * 3] = {1066.01/2.22, 0, (945.0/2.2 - 100.0),  0, 1068.87/2.22, 520/2.22,  0, 0, 1};
+	float K_inv_mat[3 * 3] = {0.00208, 0, -0.68629,  0, 0.00208, -0.48650,  0, 0, 1};
 	float world2cam[16] = {1, 0, 0, 0, 0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1};
 
 	// get the first depth frame and integrate
 	float* depth_im = new float[im_height * im_width];
 	ReadDepth(sourceFilename, im_height, im_width, depth_im);
+	//write_pt_cloud("../output_mesh/input_pt_cloud.obj", sourceFilename, im_height, im_width);
+	write_mesh("../output_mesh/input_dm_to_mesh.obj", "../data/kinect/full_depth_2/frame-000000.depth.png", im_height, im_width, K_inv_mat);
+	//TODO test
+	//write_mesh("../output_mesh/input_dm_to_mesh2.obj", "../data/kinect/kinect_1_gt/frame-000000.depth.png", 256, 256);
+	std::cout << "First image: " << sourceFilename << std::endl;
 	volume.Integrate(depth_im, K_mat, world2cam, 1);
 	
 	// 3D positions of each mesh point
@@ -143,7 +160,8 @@ int main(int argc, const char * argv[])
 	
 	// generate the first mesh using parallelized marching cube
 	extract_surface(volume, vertices, triangles, normals, vol_idx, rel_coors);
-	write_to_ply("../output_mesh/before_integration.ply",vertices,triangles);
+	//write_to_ply("../output_mesh/before_integration.ply",vertices,triangles);
+	write_to_ply("../output_mesh/before_integration.obj",vertices,triangles);
 
 	// store all the depth image names
 	std::string target_name;
@@ -162,7 +180,7 @@ int main(int argc, const char * argv[])
 													&vertices, &normals, &triangles, 
 													&vol_idx, &rel_coors, 
 													K_mat, K_inv_mat,
-													im_height, im_width);
+													im_height, im_width, is_perspective);
 
 	// record the processing time
     std::clock_t start;
@@ -204,8 +222,17 @@ int main(int argc, const char * argv[])
 		// parallel marching cube
 		vertices.clear(); triangles.clear(); normals.clear(); vol_idx.clear(); rel_coors.clear();
 		extract_surface(volume, vertices, triangles, normals, vol_idx, rel_coors);
-		//write_to_ply("../output_mesh/after_integration"+std::to_string(i+1)+".ply",vertices,triangles);
+		//write_to_ply("../output_mesh/render/after_integration"+std::to_string(i+1)+".ply",vertices,triangles);
+		//write_to_ply("../output_mesh/render/after_integration"+std::to_string(start_frame+1)+".obj",vertices,triangles);
 	}
+	//TODO temporary
+	extract_surface(volume, vertices, triangles, normals, vol_idx, rel_coors, false);
+	write_to_ply("../output_mesh/after_integration_ori_grid.obj",vertices,triangles);
+	solver->set_vnt(&vertices, &normals, &triangles, &vol_idx);
+	solver->create_depthmap();
+	//TODO test depth map
+	write_mesh("../output_mesh/test.obj", "../output_mesh/after_integration_depthmap.png", im_height, im_width, K_inv_mat);
+
 	// output the processing time
     duration = ( std::clock() - start ) / (double) CLOCKS_PER_SEC;
     std::cout<<std::endl<<"total time: "<< duration << " seconds" <<std::endl;
@@ -214,7 +241,10 @@ int main(int argc, const char * argv[])
     if (grid_flag) {solver->saveGraphResults();}
     
     // generate the final output
-	write_to_ply("../output_mesh/after_integration_final.ply",vertices,triangles);
+	//write_to_ply("../output_mesh/after_integration_final.ply",vertices,triangles);
+	vertices.clear(); triangles.clear(); normals.clear(); vol_idx.clear(); rel_coors.clear();
+	extract_surface(volume, vertices, triangles, normals, vol_idx, rel_coors);	
+	write_to_ply("../output_mesh/after_integration_final.obj",vertices,triangles);
 	
 	// clean up
 	delete solver;

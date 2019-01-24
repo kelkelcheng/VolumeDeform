@@ -7,7 +7,7 @@
 
 class TSDFVolume{
 public:
-	TSDFVolume(int x, int y, int z, float3 ori, float3 size, int3 sg_scale, int H, int W);
+	TSDFVolume(int x, int y, int z, float3 ori, float3 size, int3 sg_scale, int H, int W, bool is_perspective);
 
 	dim3 get_size(){
 		return m_size;
@@ -33,7 +33,10 @@ public:
 
 	float3* get_deform(){
 		return grid_coord;
+	}
 
+	float3* get_coord_ori(){
+		return grid_coord_ori;
 	}
 
 	unsigned int* get_state(){
@@ -62,6 +65,8 @@ private:
 	// translation vector for each node
 	//float3 *m_deform;
 	float3 *grid_coord;
+
+	float3 *grid_coord_ori;
 	
 	// state for each grid point
 	unsigned int* m_state;
@@ -70,5 +75,6 @@ private:
 
 	int im_h;
 	int im_w;
+	bool m_is_perspective;
 };
 #endif

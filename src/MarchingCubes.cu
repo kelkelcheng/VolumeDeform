@@ -350,7 +350,9 @@ void mc_kernel( const float * tsdf_dis, const float3 * tsdf_pos, dim3 size, int3
 
 
 __host__
-void extract_surface(TSDFVolume & volume, vector<float3>& vertices, vector<int3>& triangles, vector<float3>& normals, vector<int3>& vol_idx, vector<float3>& rel_coors){
+void extract_surface(TSDFVolume & volume, vector<float3>& vertices, 
+					vector<int3>& triangles, vector<float3>& normals, vector<int3>& vol_idx, vector<float3>& rel_coors,
+					bool if_current) {
 	int3 sc = make_int3(15, 15, 20); 
 	// Allocate storage on device and locally
 	// Fail if not possible
@@ -366,7 +368,13 @@ void extract_surface(TSDFVolume & volume, vector<float3>& vertices, vector<int3>
 	// Now iterate over each slice
 	size_t layer_size =  size.x * size.y * size.z; //size.x * size.y
 	const float* grid = volume.get_grid();
-	const float3* centers = volume.get_deform();
+	const float3* centers;//=volume.get_coord_ori();
+	if (if_current) {
+		centers = volume.get_deform();
+	} else {
+		centers = volume.get_coord_ori();
+	}
+	
 	
 	// new
 	// temporary host vertices
