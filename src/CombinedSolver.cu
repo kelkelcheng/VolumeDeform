@@ -200,7 +200,8 @@ void update_constraint(	float3 * d_vertices, float3 * d_normals, int3 * d_vol_id
 		            grid_state[idx1] = 2; // grid_state controls the if neighbours can be integrated
 				}
 				// disable the neighbors of the grid if the cube is not well deformed
-				if ((!check_updated) && (grid_state[idx1]==2)) {grid_state[idx1] = 0;}
+				//TODO: temporally disabled
+				//if ((!check_updated) && (grid_state[idx1]==2)) {grid_state[idx1] = 0;}
 			}
 		}
 		
@@ -244,6 +245,7 @@ void update_constraint(	float3 * d_vertices, float3 * d_normals, int3 * d_vol_id
 // setting target point positions, normals, and robust weights	before optimization
 // will be called for each ICP iteration
 // many of the inputs here can be passed directly from MarchingCubes, make it a class later...
+
 __host__
 int CombinedSolver::setConstraints(float positionThreshold, float cosNormalThreshold, float viewThreshold) //0.03 0.2 0.8
 {
@@ -301,6 +303,7 @@ int CombinedSolver::setConstraints(float positionThreshold, float cosNormalThres
     return constraintsUpdated;
 }
 
+
 // CPU version of setConstraints
 // calculate normal from depth image
 __host__
@@ -354,8 +357,8 @@ std::tuple<float3, bool> CombinedSolver::findNormal(float3 p, float* im, bool is
 	}												
 	return std::make_tuple(make_float3(0,0,0), false);				
 }
-
-/*__host__
+/*
+__host__
 int CombinedSolver::setConstraints(float positionThreshold = 0.03f, float cosNormalThreshold = 0.2f, float viewThreshold = 0.8f) //std::numeric_limits<float>::infinity() 0.03 0.2
 {
 	//test
@@ -472,4 +475,5 @@ int CombinedSolver::setConstraints(float positionThreshold = 0.03f, float cosNor
     std::cout << "*******Thrown out correspondence count: " << thrownOutCorrespondenceCount << std::endl;
 
     return constraintsUpdated;
-}*/
+}
+*/

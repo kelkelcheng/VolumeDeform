@@ -87,7 +87,8 @@ class CombinedSolver : public CombinedSolverBase
 						std::vector<float3>* rel_coors, 
 						float K[9], float K_inv[9],
 						int H, int W,
-						bool is_perspective=true
+						bool is_perspective=true,
+						float floor_height=0
 					)
 		{
             m_combinedSolverParameters = params;
@@ -95,6 +96,8 @@ class CombinedSolver : public CombinedSolverBase
 
             memcpy(K_mat, K, 9*sizeof(float));
             memcpy(K_inv_mat, K_inv, 9*sizeof(float));     
+
+			m_floor_height = floor_height;
 
 			im_h = H;
 			im_w = W;
@@ -192,6 +195,24 @@ class CombinedSolver : public CombinedSolverBase
             resetGPUMemory();
             combinedSolveInit();
 
+			/*
+            m_weightFit = 10.0f; 
+            m_weightRegMax = 32.0f; //16 64
+            
+            m_weightRegMin = 16.0f; //10 32
+            m_weightRegFactor = 0.9f; //0.95f
+
+            m_weightReg = m_weightRegMax;
+
+            m_functionTolerance = 0.0000001f;
+
+            m_fitSqrt = sqrt(m_weightFit); //1.0f
+            m_regSqrt = sqrt(m_weightReg); //3.0f
+
+            m_problemParams.set("w_fitSqrt", &m_fitSqrt);//Sqrt
+            m_problemParams.set("w_regSqrt", &m_regSqrt);//Sqrt
+			*/
+		
 			m_problemParams.set("G", m_graph); // check why it is required to set it again
 			m_problemParams.set("RegGrid", m_regGrid);
 
@@ -278,6 +299,24 @@ preSingleSolve();
             //reportFinalCosts("Robust Mesh Deformation", m_combinedSolverParameters, getCost("Opt(GN)"), getCost("Opt(LM)"), nan(""));
         }
 
+		void reset() {
+			initializeWarpGrid();
+			resetGPUMemory();
+			//combinedSolveInit();
+            m_weightFit = 10.0f; 
+            m_weightRegMax = 32.0f; //16 64
+            
+            m_weightRegMin = 16.0f; //10 32
+            m_weightRegFactor = 0.9f; //0.95f
+
+            m_weightReg = m_weightRegMax;
+
+            m_functionTolerance = 0.0000001f;
+
+            m_fitSqrt = sqrt(m_weightFit); //1.0f
+            m_regSqrt = sqrt(m_weightReg); //3.0f
+		}
+
 		void update_depth() {
 			//int H = 480; 
 			//int W = 640;
@@ -285,22 +324,63 @@ preSingleSolve();
 			std::cout << "read depth: " << m_targets[0] << std::endl; //m_targetIndex
 			m_vertices_2.clear();
 			
+			float d_scale = 2500.0;
+
 			int count = 0; //TODO remove later
+			float bound = 1.2;
 			for (int r = 0; r < im_h; ++r) {
 				for (int c = 0; c < im_w; ++c) {
-					float z = (float)(depth_mat.at<unsigned short>(r, c)) / 2500.0f;// - 1.7;
+					float z = (float)(depth_mat.at<unsigned short>(r, c)) / d_scale;// - 1.7;
 					//float z = (float)(depth_mat.at<unsigned short>(r, c)) / 10000.0f;
 					//float z = (float)(depth_mat.at<unsigned short>(r, c)) / 1000.0f * 1.1f - 11.0f;
 
 					//if (count <= 50) {std::cout << "z: " << z << std::endl; count++;} //TODO remove later
 
 					//if (z!=0) z += 0.45; //0.3  0.45
-					m_depth_mat[r * im_w + c] = z;
 
-					if (z >= 0.0 && z < 1.2) { //1.2
+					if (r > 0 && r < im_h-1 && c > 0 && c < im_w-1) {
+						float z0 = (float)(depth_mat.at<unsigned short>(r+1, c+1)) / d_scale;
+						float z1 = (float)(depth_mat.at<unsigned short>(r+1, c)) / d_scale;
+						float z2 = (float)(depth_mat.at<unsigned short>(r+1, c-1)) / d_scale;
+						float z3 = (float)(depth_mat.at<unsigned short>(r, c+1)) / d_scale;
+						float z4 = (float)(depth_mat.at<unsigned short>(r, c)) / d_scale;
+						float z5 = (float)(depth_mat.at<unsigned short>(r, c-1)) / d_scale;
+						float z6 = (float)(depth_mat.at<unsigned short>(r-1, c+1)) / d_scale;
+						float z7 = (float)(depth_mat.at<unsigned short>(r-1, c)) / d_scale;
+						float z8 = (float)(depth_mat.at<unsigned short>(r-1, c+1)) / d_scale;
+
+						if (z0==0 || z1==0 || z2==0 || z3==0 || z4==0 || z5==0 || z6==0 || z7==0 || z8==0 || z4<0.0 || z4>bound) {
+							continue;    
+						} else {
+							float3 v;
+							if (m_is_perspective) {
+								v = make_float3(c*z, r*z, z);
+
+								//check if floor
+								if (v.y < m_floor_height) {
+									continue;
+								}	
+							}
+							else {
+								v = make_float3(c, r, z);
+							}
+							vecTrans(v, K_inv_mat);
+							m_vertices_2.push_back(v);
+						}
+					}
+
+					m_depth_mat[r * im_w + c] = z;
+					
+					/*
+					if (z >= 0.0 && z < bound) { //1.2
 						float3 v;
 						if (m_is_perspective) {
 							v = make_float3(c*z, r*z, z);
+
+							//check if floor
+							if (v.y < m_floor_height) {
+								continue;
+							}							
 						}
 						else {
 							v = make_float3(c, r, z);
@@ -308,6 +388,8 @@ preSingleSolve();
 						vecTrans(v, K_inv_mat);
 						m_vertices_2.push_back(v);
 					}  
+					*/
+					
 				}	
 			}
 		}
@@ -317,7 +399,7 @@ preSingleSolve();
 			return (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x); 
 		} 
 
-		void create_depthmap() {
+		void create_depthmap(std::string filename) {
 
 			vector<float3>& vertices = *m_vertices;
 			//float* zbuffer = new float[im_h * im_w];
@@ -383,51 +465,21 @@ preSingleSolve();
 					}
 				}
 			}
-			
-			//int count = 0; //TODO remove later
-			/*
-			for (int r = 0; r < im_h; ++r) {
-				for (int c = 0; c < im_w; ++c) {
-					temp_mat[r*im_w+c] = make_float3(0.0, 0.0, 0.0);
-					float shortest = 100.0;
 
-					for (int i=0; i<vertices.size(); i++){
-						float3 v = vertices[i];
-						vecTrans(v, K_mat);
+			// generate obj file
+			//depthmap_to_obj(zbuffer);
 
-						float x = v.x / v.z;
-						float y = v.y / v.z;
+			// save depth map as png
+			cv::Mat depth_map = cv::Mat(zbuffer).reshape(0, im_h);
+			depth_map *= 2500.0;
+			depth_map.convertTo( depth_map, CV_16UC1 );
+			//cv::imwrite( "../output_mesh/after_integration_depthmap.png", depth_map );
+			cv::imwrite( filename, depth_map );
+			//delete zbuffer;		
+		}
 
-						//int x = (int) round(v.x / v.z);
-						//int y = (int) round(v.y / v.z);
-
-						if (std::abs(x-c)<1.001 && std::abs(y-r)<1.001) {
-							float dis = length(make_float2((float)c, (float)r) - make_float2(x, y));
-							if (dis < shortest) {
-								shortest = dis;
-								temp_mat[r*im_w+c] = v; // vertices[i];
-							}
-						}
-						//if (y<im_h && x<im_w) {temp_mat[y*im_w+x] = vertices[i];}				
-					}
-				}  
-			}
-			*/
-			/*
-			for (int r = 0; r < im_h; ++r) {
-				for (int c = 0; c < im_w; ++c) {
-					temp_mat[r*im_w+c] = make_float3(0.0, 0.0, 0.0);
-				}  
-			}
-
-			for (int i=0; i<vertices.size(); i++){
-				float3 v = vertices[i];
-				vecTrans(v, K_mat);
-				int x = (int) round(v.x / v.z);
-				int y = (int) round(v.y / v.z);
-				if (y<im_h && x<im_w) {temp_mat[y*im_w+x] = vertices[i];}				
-			}*/
-
+		void depthmap_to_obj(std::vector<float> &zbuffer) 
+		{
 			int H = im_h;
 			int W = im_w;
 			std::ofstream f ;
@@ -437,25 +489,12 @@ preSingleSolve();
 			if( f.is_open() ) {
 				for (int r = 0; r < H; ++r) {
 					for (int c = 0; c < W; ++c) {
-						/*float3 vv = temp_mat[r*W+c];
-						vv.x = (float)c * vv.z;
-						vv.y = (float)r * vv.z;*/
 						float v_z = zbuffer[r*W+c];
 						float3 vv = make_float3((float)c * v_z, (float)r * v_z, v_z);
 						vecTrans(vv, K_inv_mat);
 						f << "v " << vv.y << " " << vv.x << " " << vv.z << std::endl;
 					}
 				}
-				
-				/*for (int i = 0; i < H-1; ++i) {
-					for (int j = 0; j < W-1; ++j) {
-						if (temp_mat[i*W+j].z > 0.0f) {
-							f << "f " << i*W+j+1 << " " << i*W+j+2 << " " << (i+1)*W+j+1 << std::endl;
-							f << "f " << (i+1)*W+(j+1)+1 << " " << (i+1)*W+j+1 << " " << i*W+j+1+1 << std::endl;
-						}
-					}
-				}*/
-
 				
 				for (int r = 0; r < H-2; ++r) {
 					for (int c = 0; c < W-2; ++c) {
@@ -471,48 +510,70 @@ preSingleSolve();
 						float z7 = zbuffer[(r+1)*W+c];
 						float z8 = zbuffer[(r+1)*W+c+1];
 
-						//if (count<100 && z4>0) {std::cout << z0 <<" "<<z1<<" "<<z2<<" "<<z3<<" "<<z4<<std::endl;count++;}
-
 						float dy_u_max = std::max({fabs(z0 - z3), fabs(z1 - z4), fabs(z2 - z5)});
 						float dy_d_max = std::max({fabs(z0 - z6), fabs(z1 - z7), fabs(z2 - z8)});
 						float dx_l_max = std::max({fabs(z0 - z1), fabs(z3 - z4), fabs(z6 - z7)});
 						float dx_r_max = std::max({fabs(z0 - z2), fabs(z3 - z5), fabs(z6 - z8)});
-					
-						//if (count<100 && z4>0) {std::cout << z0 - z3 <<" "<<dy_d_max<<" "<<dx_l_max<<" "<<dx_r_max<<std::endl;count++;}
-
-						//f << "f " << r*H+c+1 << " " << r*H+c+1+1 << " " << (r+1)*H+c+1 << std::endl;
-
 						
 						if (((dy_u_max<threshold) && (dy_d_max<threshold)) && ((dx_l_max<threshold) && (dx_r_max<threshold))) {
 							//if (z0>0 && z1>0 && z2>0 && z3>0 && z4>0 && z5>0 && z6>0 && z7>0 && z8>0){
 							if (z4>0 && z5>0 && z7>0){
 								f << "f " << r*W+c+1 << " " << r*W+c+2 << " " << (r+1)*W+c+1 << std::endl;
-								//f << "f " << (r+1)*W+(c+1)+1 << " " << (r+1)*W+c+1 << " " << r*W+c+1+1 << std::endl;
 							}
 							if (z5>0 && z7>0 && z8>0){
-								//f << "f " << r*W+c+1 << " " << r*W+c+2 << " " << (r+1)*W+c+1 << std::endl;
 								f << "f " << (r+1)*W+(c+1)+1 << " " << (r+1)*W+c+1 << " " << r*W+c+1+1 << std::endl;
 							}										
 						}
 						
 					}
 				}
-
-				// create depth map as png
-				/*std::vector<float> depth_map_vec(im_h * im_w, 0);
-				for (int i = 0; i < im_h * im_w; ++i) {
-					depth_map_vec[i] = zbuffer[i] * 2500.0;
-				}*/
-				//cv::Mat depth_map = cv::Mat(depth_map_vec).reshape(0, im_h);
-				cv::Mat depth_map = cv::Mat(zbuffer).reshape(0, im_h);
-				depth_map *= 2500.0;
-				//memcpy(depth_map.data, zbuffer);
-				depth_map.convertTo( depth_map, CV_16UC1 );
-				cv::imwrite( "../output_mesh/after_integration_depthmap.png", depth_map );
-				//delete zbuffer;
-			}
-			f.close();	
+			f.close();
+			}					
 		}
+
+		//previous code, a nearest-neighbour approach
+		/*
+		for (int r = 0; r < im_h; ++r) {
+			for (int c = 0; c < im_w; ++c) {
+				temp_mat[r*im_w+c] = make_float3(0.0, 0.0, 0.0);
+				float shortest = 100.0;
+
+				for (int i=0; i<vertices.size(); i++){
+					float3 v = vertices[i];
+					vecTrans(v, K_mat);
+
+					float x = v.x / v.z;
+					float y = v.y / v.z;
+
+					//int x = (int) round(v.x / v.z);
+					//int y = (int) round(v.y / v.z);
+
+					if (std::abs(x-c)<1.001 && std::abs(y-r)<1.001) {
+						float dis = length(make_float2((float)c, (float)r) - make_float2(x, y));
+						if (dis < shortest) {
+							shortest = dis;
+							temp_mat[r*im_w+c] = v; // vertices[i];
+						}
+					}
+					//if (y<im_h && x<im_w) {temp_mat[y*im_w+x] = vertices[i];}				
+				}
+			}  
+		}
+		*/
+		/*
+		for (int r = 0; r < im_h; ++r) {
+			for (int c = 0; c < im_w; ++c) {
+				temp_mat[r*im_w+c] = make_float3(0.0, 0.0, 0.0);
+			}  
+		}
+
+		for (int i=0; i<vertices.size(); i++){
+			float3 v = vertices[i];
+			vecTrans(v, K_mat);
+			int x = (int) round(v.x / v.z);
+			int y = (int) round(v.y / v.z);
+			if (y<im_h && x<im_w) {temp_mat[y*im_w+x] = vertices[i];}				
+		}*/
 
 		int getIndex1D(int3 idx)
         {
@@ -896,5 +957,7 @@ preSingleSolve();
 		float K_mat[9];  //[3 * 3] = {570.342, 0, 320,  0, 570.342, 240,  0, 0, 1};
 		float K_inv_mat[9];  //[3 * 3] = {0.00175333, 0, -0.561066,  0, 0.00175333, -0.4208001,  0, 0, 1};
 		std::vector<float3> h_gridVertexPosFloat3;
+
+		float m_floor_height = 0.0;
 };
 #endif

@@ -47,6 +47,7 @@ public:
 		return m_sg_scale;
 	}
 	
+	void Reset();
 	void InitSubGrid(std::vector<float3>& sg_pos, int3 sg_dims);
 	void Upsample(std::vector<float3>& sg_pos);
 

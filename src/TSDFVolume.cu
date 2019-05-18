@@ -93,6 +93,7 @@ TSDFVolume::TSDFVolume(int x, int y, int z, float3 ori, float3 size, int3 sg_sca
 
         cudaSafeCall(cudaMalloc( &m_weights, data_size ));
 		cudaMemset(m_weights,0,data_size);
+		cudaDeviceSynchronize( );
  
 		cudaSafeCall(cudaMalloc(&grid_coord, xyz * sizeof(float3)));
 		initialize_grid<<< ceil(xyz / (float)max_threads), max_threads >>>(grid_coord, m_size, voxel_size, origin);
@@ -113,6 +114,33 @@ TSDFVolume::~TSDFVolume() {
     deallocate( );
 }
 
+// Reset the volume, mainly used for generating consecutive depth maps
+__host__
+void TSDFVolume::Reset() {
+	int xyz = m_size.x * m_size.y * m_size.z;
+	size_t data_size = xyz * sizeof( float );
+	
+	// reset m_distances
+	float * voxel_grid_TSDF = new float[xyz];
+	for(int i = 0; i< xyz;i++)
+		voxel_grid_TSDF[i] = 99.0f; //1.0f; 
+	cudaMemcpy(m_distances, voxel_grid_TSDF, data_size, cudaMemcpyHostToDevice);
+	delete voxel_grid_TSDF;
+
+	// reset m_weights
+	cudaMemset(m_weights,0,data_size);	
+	cudaDeviceSynchronize( );
+
+	// reset grid_coord
+	//TODO: can use memset to save computation time
+	cudaSafeCall(cudaMalloc(&grid_coord, xyz * sizeof(float3)));
+	initialize_grid<<< ceil(xyz / (float)max_threads), max_threads >>>(grid_coord, m_size, voxel_size, origin);
+	cudaDeviceSynchronize( );
+
+	// reset m_state
+	cudaMemset(m_state, 0, xyz * sizeof(unsigned int));
+	cudaDeviceSynchronize( );
+}
 
 /**
  * Deallocate storage for this TSDF
@@ -206,6 +234,11 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 		//if (volume_idx < 10) {printf("hello3 volume idx: %d, x: %d, y: %d, z: %f, dep: %f \n", volume_idx, pt_pix_x, pt_pix_y, pt_cam_z, depth_val);}
 
 		float diff = depth_val - pt_cam_z;
+
+		//TODO: edited
+		//if (diff >= 9.0) {
+		//	return;
+		//}
 
 		/*if (diff <= -trunc_margin) {
 			voxel_grid_TSDF[volume_idx] = -1.0f; //voxel_grid_TSDF[volume_idx] = 99.0f; //
