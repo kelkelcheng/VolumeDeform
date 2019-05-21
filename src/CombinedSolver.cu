@@ -20,7 +20,7 @@ int index_3to1(int3 idx, int3 grid_size)
 
 // trilinear intepolation
 __device__
-void update_pos(int i, float3 * vertices, float3 * gridPosFloat3, int3 * voxel_idx, float3 * rel_coors, int3 grid_size) {
+void update_pos(int i, float3 * vertices, float3 * gridPosFloat3, int3 * voxel_idx, float3 * rel_coors, int3 grid_size, float3 * R1, float3 * R2, float3 * R3, float3 * t) {
 	int3   voxelId = voxel_idx[i]; 
 	float3 relativeCoords = rel_coors[i]; 
 
@@ -43,18 +43,28 @@ void update_pos(int i, float3 * vertices, float3 * gridPosFloat3, int3 * voxel_i
 
 	float3 p = (1.0f - relativeCoords.z)*pxx0 + relativeCoords.z*pxx1;
 
-	vertices[i] = p;
+	float3 pt;
+	pt.x = dot(R1[0], p);
+	pt.y = dot(R2[0], p);
+	pt.z = dot(R3[0], p);
+	//R[0] = (*R1).x; R[1] = *R1.y; R[2] = *R1.z;
+	//R[3] = *R2.x; R[4] = *R2.y; R[5] = *R2.z;
+	//R[6] = *R3.x; R[7] = *R3.y; R[8] = *R3.z;
+	//vecTrans(p, R);
+	pt += t[0];
+	vertices[i] = pt;
 }
 
 // update vertices positions and normals
 // notice that each index in triangle is unique... maybe we can save up some space but it is easier this way
 __global__
-void update_pos_normal(float3 * vertices, float3 * normals, int3 * triangles, float3 * gridPosFloat3, int3 * voxel_idx, float3 * rel_coors, int size, int3 grid_size) {
+void update_pos_normal(float3 * vertices, float3 * normals, int3 * triangles, float3 * gridPosFloat3, int3 * voxel_idx, float3 * rel_coors, int size, int3 grid_size,
+float3 * R1, float3 * R2, float3 * R3, float3 * t) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i < size) {
-		update_pos(triangles[i].x, vertices, gridPosFloat3, voxel_idx, rel_coors, grid_size);
-		update_pos(triangles[i].y, vertices, gridPosFloat3, voxel_idx, rel_coors, grid_size);
-		update_pos(triangles[i].z, vertices, gridPosFloat3, voxel_idx, rel_coors, grid_size);
+		update_pos(triangles[i].x, vertices, gridPosFloat3, voxel_idx, rel_coors, grid_size, R1, R2, R3, t);
+		update_pos(triangles[i].y, vertices, gridPosFloat3, voxel_idx, rel_coors, grid_size, R1, R2, R3, t);
+		update_pos(triangles[i].z, vertices, gridPosFloat3, voxel_idx, rel_coors, grid_size, R1, R2, R3, t);
 		
 		float3 uVec = vertices[triangles[i].y] - vertices[triangles[i].x];
 		float3 vVec = vertices[triangles[i].z] - vertices[triangles[i].x];
@@ -83,7 +93,7 @@ void CombinedSolver::copyResultToCPUFromFloat3() {
 	// intialize and copy memory to GPU	
 	float3 * d_vertices;
 	float3 * d_rel_coors; // trilinear weights in the sparse subgrid
-	int3 * d_voxel_idx; // cube index in the full grid
+	int3 * d_voxel_idx; // cube index in the full gridd_vol_idx
 	cudaSafeCall( cudaMalloc(&d_vertices, M * sizeof(float3)) );
 	cudaSafeCall( cudaMalloc(&d_voxel_idx, M * sizeof(int3)) );
 	cudaSafeCall( cudaMalloc(&d_rel_coors, M * sizeof(float3)) );
@@ -102,7 +112,8 @@ void CombinedSolver::copyResultToCPUFromFloat3() {
 	cudaSafeCall( cudaMalloc(&d_triangles, M * sizeof(int3)) );
 	cudaSafeCall( cudaMemcpy(d_triangles, triangles.data(), M * sizeof(int3), cudaMemcpyHostToDevice) );
 	
-	update_pos_normal<<< blocknum, max_threads >>>(d_vertices, d_normals, d_triangles, (float3*)m_gridPosFloat3->data(), d_voxel_idx, d_rel_coors, M, m_gridDims);
+	update_pos_normal<<< blocknum, max_threads >>>(d_vertices, d_normals, d_triangles, (float3*)m_gridPosFloat3->data(), d_voxel_idx, d_rel_coors, M, m_gridDims, 
+	(float3*)m_R1->data(), (float3*)m_R2->data(), (float3*)m_R3->data(), (float3*)m_transGlobal->data());
 	cudaSafeCall( cudaDeviceSynchronize() );
 	
 	cudaSafeCall( cudaMemcpy(vertices.data(), d_vertices, vertices.size() * sizeof(float3), cudaMemcpyDeviceToHost) );

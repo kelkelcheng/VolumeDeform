@@ -147,12 +147,12 @@ void write_mesh( const std::string& file_name_out, const std::string& file_name,
         float dx_l_max = std::max({fabs(z0 - z1), fabs(z3 - z4), fabs(z6 - z7)});
         float dx_r_max = std::max({fabs(z0 - z2), fabs(z3 - z5), fabs(z6 - z8)});
 
-        if (((dy_u_max<threshold) && (dy_d_max<threshold)) && ((dx_l_max<threshold) && (dx_r_max<threshold))) {
+        //if (((dy_u_max<threshold) && (dy_d_max<threshold)) && ((dx_l_max<threshold) && (dx_r_max<threshold))) {
           if (z0>0 && z1>0 && z2>0 && z3>0 && z4>0 && z5>0 && z6>0 && z7>0 && z8>0){
               f << "f " << r*W+c+1 << " " << r*W+c+2 << " " << (r+1)*W+c+1 << std::endl;
               f << "f " << (r+1)*W+c+2 << " " << (r+1)*W+c+1 << " " << r*W+c+2 << std::endl;
           }
-        }
+        //}
       } 
     }
     std::cout << "mesh: max: " << z_max << " min: " << z_min << std::endl;    
@@ -189,6 +189,7 @@ void ReadDepth(std::string filename, int H, int W, float * depth, float K_inv_ma
   float z_max = 0;
   float z_min = 3;
   float bound = 1.2;
+  float lb = 0.3;
   float d_scale = 2500.0;
   
   for (int r = 0; r < H; ++r) {
@@ -203,7 +204,7 @@ void ReadDepth(std::string filename, int H, int W, float * depth, float K_inv_ma
       if (z>0.0) z_min = std::min(z_min, z);
       //if (z>0.0) std::cout << "depth value: " << z << std::endl;
 
-      if (depth[r * W + c] > bound) { // Only consider depth < 1m
+      if (depth[r * W + c] > bound || depth[r * W + c] < lb) { // Only consider depth < 1m
         depth[r * W + c] = 0;
         count++;
         continue;
@@ -219,7 +220,7 @@ void ReadDepth(std::string filename, int H, int W, float * depth, float K_inv_ma
       }
 
       // check if is slihouette
-      /*bool slihouette_flag = 0;
+      bool slihouette_flag = 0;
       if (r > 0 && r < H-1 && c > 0 && c < W-1) {
         float z0 = (float)(depth_mat.at<unsigned short>(r+1, c+1)) / d_scale;
         float z1 = (float)(depth_mat.at<unsigned short>(r+1, c)) / d_scale;
@@ -237,7 +238,7 @@ void ReadDepth(std::string filename, int H, int W, float * depth, float K_inv_ma
         } else {
           depth[r * W + c] = z;
         }
-      }*/
+      }
     }
   }
   std::cout << "max: " << z_max << " min: " << z_min << std::endl;

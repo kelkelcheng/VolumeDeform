@@ -148,11 +148,19 @@ class CombinedSolver : public CombinedSolverBase
 			m_vertexNormalTargetFloat3  = createEmptyOptImage(dims, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);          
 			m_triWeights              	= createEmptyOptImage(dims, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
 
+			std::vector<unsigned int> dims_1 = { 1 };
+			m_R1						= createEmptyOptImage(dims_1, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
+			m_R2						= createEmptyOptImage(dims_1, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
+			m_R3						= createEmptyOptImage(dims_1, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
+			m_transGlobal				= createEmptyOptImage(dims_1, OptImage::Type::FLOAT, 3, OptImage::Location::GPU, true);
+
 			// initialize graph variables in Opt
 			initializeWarpGrid();		
 			grid_state.resize(vol_size.x * vol_size.y * vol_size.z);
 
-			addOptSolvers(dims, "opt_formulation.t", m_combinedSolverParameters.optDoublePrecision);
+			//addOptSolvers(dims, "opt_formulation.t", m_combinedSolverParameters.optDoublePrecision);
+			addOptSolvers(dims, "opt_global.t", m_combinedSolverParameters.optDoublePrecision);
+
 			//addOptSolvers(dims, "opt_rotation.t", m_combinedSolverParameters.optDoublePrecision);
             //addOptSolvers(dims, "opt_position.t", m_combinedSolverParameters.optDoublePrecision);
 		} 
@@ -181,6 +189,12 @@ class CombinedSolver : public CombinedSolverBase
             m_problemParams.set("Constraints", m_vertexPosTargetFloat3);
 			m_problemParams.set("ConstraintNormals", m_vertexNormalTargetFloat3); 
 			m_problemParams.set("TriWeights", m_triWeights);
+
+			m_problemParams.set("R1", m_R1);
+			m_problemParams.set("R2", m_R2);
+			m_problemParams.set("R3", m_R3);
+			m_problemParams.set("Trans_G", m_transGlobal);
+
 			m_problemParams.set("G", m_graph);
 			m_problemParams.set("RegGrid", m_regGrid);
 
@@ -328,6 +342,8 @@ preSingleSolve();
 
 			int count = 0; //TODO remove later
 			float bound = 1.2;
+			float lb = 0.3;
+
 			for (int r = 0; r < im_h; ++r) {
 				for (int c = 0; c < im_w; ++c) {
 					float z = (float)(depth_mat.at<unsigned short>(r, c)) / d_scale;// - 1.7;
@@ -349,7 +365,7 @@ preSingleSolve();
 						float z7 = (float)(depth_mat.at<unsigned short>(r-1, c)) / d_scale;
 						float z8 = (float)(depth_mat.at<unsigned short>(r-1, c+1)) / d_scale;
 
-						if (z0==0 || z1==0 || z2==0 || z3==0 || z4==0 || z5==0 || z6==0 || z7==0 || z8==0 || z4<0.0 || z4>bound) {
+						if (z0==0 || z1==0 || z2==0 || z3==0 || z4==0 || z5==0 || z6==0 || z7==0 || z8==0 || z4<0.0 || z4>bound || z4<lb) {
 							continue;    
 						} else {
 							float3 v;
@@ -675,6 +691,15 @@ preSingleSolve();
             m_gridPosFloat3->update(h_gridVertexPosFloat3);
             m_gridPosFloat3Urshape->update(h_gridVertexPosFloat3);
 			cudaSafeCall(cudaMemset(m_anglesFloat3->data(), 0, sizeof(float3)*m_nNodes));
+
+			h_R1.clear(); h_R1.push_back(make_float3(1,0,0)); m_R1->update(h_R1);
+			h_R2.clear(); h_R2.push_back(make_float3(0,1,0)); m_R2->update(h_R2);
+			h_R3.clear(); h_R3.push_back(make_float3(0,0,1)); m_R3->update(h_R3);
+		
+			
+			//cudaSafeCall(cudaMemset(m_R1->data(), 0, sizeof(float3)));
+			//cudaSafeCall(cudaMemset(m_R2->data(), 0, sizeof(float3)));
+			//cudaSafeCall(cudaMemset(m_R3->data(), 0, sizeof(float3)));
 		}
 
 		// this function will be called for each new depth frame
@@ -689,6 +714,8 @@ preSingleSolve();
 	        std::vector<int> w;
 			std::vector<int> v1; std::vector<int> v2; std::vector<int> v3; std::vector<int> v4;
 			std::vector<int> v5; std::vector<int> v6; std::vector<int> v7; std::vector<int> v8; 
+
+			std::vector<int> rt;
 
 			vector<float3>& vertices = *m_vertices;
 
@@ -723,10 +750,11 @@ preSingleSolve();
 				v7.push_back( getIndex1D(pInt + make_int3(1, 1, 0)) );
 				v8.push_back( getIndex1D(pInt + make_int3(1, 1, 1)) );
 
+				rt.push_back(0);
 			}
 
 			m_triWeights->update(m_relativeCoords);
-			m_graph = std::make_shared<OptGraph>(std::vector<std::vector<int> >({ w, v1, v2, v3, v4, v5, v6, v7, v8}));
+			m_graph = std::make_shared<OptGraph>(std::vector<std::vector<int> >({ w, v1, v2, v3, v4, v5, v6, v7, v8, rt}));
 		}
 
 		std::vector<float3>* get_grid()
@@ -938,10 +966,16 @@ preSingleSolve();
 		std::shared_ptr<OptImage> m_gridPosFloat3Urshape;
 		std::shared_ptr<OptImage> m_vertexPosTargetFloat3;
 		std::shared_ptr<OptImage> m_vertexNormalTargetFloat3;		        
-		std::shared_ptr<OptImage> m_triWeights;
-		std::shared_ptr<OptGraph> m_graph;
-		std::shared_ptr<OptGraph> m_regGrid;	
+		std::shared_ptr<OptImage> m_triWeights;	
 		
+		std::shared_ptr<OptImage> m_R1;
+		std::shared_ptr<OptImage> m_R2;
+		std::shared_ptr<OptImage> m_R3;
+		std::shared_ptr<OptImage> m_transGlobal;
+
+		std::shared_ptr<OptGraph> m_graph;
+		std::shared_ptr<OptGraph> m_regGrid;
+
         float m_weightFit;
         float m_weightRegMax;
         float m_weightRegMin;
@@ -957,6 +991,10 @@ preSingleSolve();
 		float K_mat[9];  //[3 * 3] = {570.342, 0, 320,  0, 570.342, 240,  0, 0, 1};
 		float K_inv_mat[9];  //[3 * 3] = {0.00175333, 0, -0.561066,  0, 0.00175333, -0.4208001,  0, 0, 1};
 		std::vector<float3> h_gridVertexPosFloat3;
+
+		std::vector<float3> h_R1;
+		std::vector<float3> h_R2;
+		std::vector<float3> h_R3;
 
 		float m_floor_height = 0.0;
 };

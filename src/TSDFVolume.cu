@@ -203,7 +203,7 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 
 		//if (volume_idx < 10) {printf("hello1 volume idx: %d, x: %f, y: %f, z_2: %f \n", volume_idx, pt_cam_x, pt_cam_y, pt_cam_z);}
 
-		if (pt_cam_z <= 0.01f) //0
+		if (pt_cam_z <= 0.0f) //0
 			return;
 
 		//TODO: add orthographic projection
@@ -227,7 +227,7 @@ void Integrate_kernal(float * cam_K, float * cam2base, float * depth_im,
 
 		float depth_val = depth_im[pt_pix_y * W + pt_pix_x];
 
-		if (depth_val <= 0 || depth_val > 1.2) //0, 6
+		if (depth_val <= 0.2 || depth_val > 1.2) //0, 6
 			return;
 
 		//if (volume_idx < 1000000) {printf("hello3 volume idx: %d, x: %d, y: %d, z: %f, dep: %f \n", volume_idx, pt_pix_x, pt_pix_y, pt_cam_z, depth_val);}

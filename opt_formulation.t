@@ -13,6 +13,8 @@ local TriWeights	    = Array("TriWeights", opt_float3, {M}, 8)
 local G                 = Graph("G", 9, "w", {M}, 10, "v0", {M}, 11, "v1", {M}, 12, "v2", {M}, 13, 
                                 "v3", {M}, 14, "v4", {M}, 15, "v5", {M}, 16, "v6", {M}, 17, "v7", {M}, 18)
 local RegGrid           = Graph("RegGrid", 19, "v0", {M}, 20, "v1", {M}, 21)
+local Angle_G           = Param("Angle_G", opt_float3, 22)
+local Trans_G           = Param("Trans_G", opt_float3, 23)
 
 UsePreconditioner(true)
 
